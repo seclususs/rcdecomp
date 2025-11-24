@@ -1,0 +1,5 @@
+language = "C"
+style = "tag"
+header = "/* RCDecomp Header */"
+include_guard = "RCDECOMP_H"
+tab_width = 4

@@ -1,0 +1,7 @@
+[package]
+name = "rcdecomp_cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rcdecomp_core = { path = "../core" }

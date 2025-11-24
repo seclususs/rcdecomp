@@ -1,0 +1,47 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+env/
+venv/
+.venv/
+build/
+dist/
+*.egg-info/
+
+# C / C++
+*.o
+*.so
+*.dll
+*.dylib
+*.exe
+*.out
+*.obj
+*.a
+*.lib
+
+# Build files
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Log
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
