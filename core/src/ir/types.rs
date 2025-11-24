@@ -1,8 +1,10 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum TipeOperand {
     Register(String),
+    SsaVariable(String, usize), 
     Immediate(i64),
     Memory(u64),
+    MemoryRef { base: String, offset: i64 },
     None,
 }
 
@@ -15,9 +17,16 @@ pub enum OperasiIr {
     Jmp,
     Je,
     Jne,
+    Jg,
+    Jge,
+    Jl,
+    Jle,
+    Cmp,
+    Test,
     Call,
     Ret,
     Nop,
+    Phi,
     Unknown,
 }
 
@@ -27,6 +36,7 @@ pub struct StatementIr {
     pub operation_code: OperasiIr,
     pub operand_satu: TipeOperand,
     pub operand_dua: TipeOperand,
+    pub operand_tambahan: Vec<TipeOperand>, 
 }
 
 impl StatementIr {
@@ -36,6 +46,7 @@ impl StatementIr {
             operation_code: op,
             operand_satu: op1,
             operand_dua: op2,
+            operand_tambahan: Vec::new(),
         }
     }
     pub fn convert_ke_string(&self) -> String {

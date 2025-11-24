@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 rcdecomp_core = { path = "../core" }
+log = "0.4"
+env_logger = "0.10"

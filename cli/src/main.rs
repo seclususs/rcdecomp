@@ -1,22 +1,25 @@
 use std::ffi::CString;
-use rcdecomp_core::{create_contextDecompiler, load_binaryFile, free_contextDecompiler};
+use rcdecomp_core::{buat_konteks_decompiler, muat_file_biner, hapus_konteks_decompiler};
+use env_logger;
+use log::{info, error};
 
 fn main() {
-    println!("RCDecomp CLI - Memulai...");
-    let ctx_ptr = create_contextDecompiler();
+    env_logger::init();
+    info!("RCDecomp CLI - Memulai...");
+    let ctx_ptr = buat_konteks_decompiler();
     if ctx_ptr.is_null() {
-        eprintln!("Gagal create_contextDecompiler!");
+        error!("Gagal buat_konteks_decompiler!");
         return;
     }
-    println!("Context berhasil dibuat.");
-    let path_target = "test_binary.elf";
+    info!("Context berhasil dibuat.");
+    let path_target = "test_binary.elf"; 
     let c_path = CString::new(path_target).expect("CString conversion failed");
-    let status_code = load_binaryFile(ctx_ptr, c_path.as_ptr());
+    let status_code = muat_file_biner(ctx_ptr, c_path.as_ptr());
     if status_code == 0 {
-        println!("Sukses memanggil load_binaryFile untuk: {}", path_target);
+        info!("Sukses memanggil muat_file_biner untuk: {}", path_target);
     } else {
-        eprintln!("Gagal load_binaryFile dengan kode: {}", status_code);
+        error!("Gagal muat_file_biner dengan kode: {}", status_code);
     }
-    free_contextDecompiler(ctx_ptr);
-    println!("Selesai cleanup_resources.");
+    hapus_konteks_decompiler(ctx_ptr);
+    info!("Selesai cleanup_resources.");
 }

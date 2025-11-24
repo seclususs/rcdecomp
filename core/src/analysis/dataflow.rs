@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use crate::ir::types::{TipeOperand, OperasiIr};
 use super::cfg::ControlFlowGraph;
+use log::debug;
 
 pub struct DataFlowAnalysis {
     pub definitions: HashMap<u64, HashSet<String>>,
@@ -45,12 +46,12 @@ impl DataFlowAnalysis {
         }
     }
     pub fn cetak_laporan_dataflow(&self) {
-        println!("--- Laporan Analisis Data Flow ---");
+        debug!("--- Laporan Analisis Data Flow ---");
         for (id, defs) in &self.definitions {
             let uses = self.usages.get(id).unwrap();
-            println!("Block 0x{:x}:", id);
-            println!("  Defined: {:?}", defs);
-            println!("  Used:    {:?}", uses);
+            debug!("Block 0x{:x}:", id);
+            debug!("  Defined: {:?}", defs);
+            debug!("  Used:    {:?}", uses);
         }
     }
 }

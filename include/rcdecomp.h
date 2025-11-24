@@ -10,10 +10,10 @@
 
 struct ContextDecompiler;
 
-struct ContextDecompiler *create_contextDecompiler(void);
+struct ContextDecompiler *buat_konteks_decompiler(void);
 
-void free_contextDecompiler(struct ContextDecompiler *ctx_ptr);
+void hapus_konteks_decompiler(struct ContextDecompiler *ctx_ptr);
 
-int load_binaryFile(struct ContextDecompiler *ctx_ptr, const char *path_ptr);
+int muat_file_biner(struct ContextDecompiler *ctx_ptr, const char *path_ptr);
 
 #endif  /* RCDECOMP_H */

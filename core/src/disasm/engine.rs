@@ -14,7 +14,7 @@ impl DisasmEngine {
             _mode: "64-bit".to_string(),
         }
     }
-    pub fn disassemble_buffer(&self, buffer: &[u8], start_addr: u64) -> Vec<InstructionNormalized> {
+    pub fn lakukan_disassembly(&self, buffer: &[u8], start_addr: u64) -> Vec<InstructionNormalized> {
         let cs_mode = if self.arch == "x86_64" {
             ArchMode::Mode64
         } else {
