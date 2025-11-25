@@ -1,15 +1,26 @@
 use std::collections::{HashMap, HashSet};
 use crate::ir::types::{OperasiIr, TipeOperand};
 use crate::analysis::cfg::ControlFlowGraph;
+use crate::analysis::alias_analysis::{AliasAnalyzer, MemoryRegion};
 use log::debug;
 
-pub struct ExpressionOptimizer;
+pub struct ExpressionOptimizer {
+    alias_analyzer: AliasAnalyzer,
+}
 
 impl ExpressionOptimizer {
     pub fn new() -> Self {
-        Self
+        Self {
+            alias_analyzer: AliasAnalyzer::new(),
+        }
     }
-    pub fn jalankan_optimasi(&self, cfg: &mut ControlFlowGraph) {
+    pub fn jalankan_optimasi(&mut self, cfg: &mut ControlFlowGraph) {
+        let mut all_stmts = Vec::new();
+        for block in cfg.blocks.values() {
+            all_stmts.extend(block.instruksi_list.clone());
+        }
+        self.alias_analyzer.analisis_pointer(&all_stmts, "rbp");
+        self.common_subexpression_elimination(cfg);
         let mut changed = true;
         let mut iterasi = 0;
         while changed && iterasi < 10 {
@@ -25,6 +36,37 @@ impl ExpressionOptimizer {
             iterasi += 1;
         }
         self.sederhanakan_ekspresi(cfg);
+    }
+    fn common_subexpression_elimination(&self, cfg: &mut ControlFlowGraph) {
+        for block in cfg.blocks.values_mut() {
+            let mut available_loads: HashMap<MemoryRegion, TipeOperand> = HashMap::new();
+            for stmt in &mut block.instruksi_list {
+                if let OperasiIr::Mov = stmt.operation_code {
+                    if let TipeOperand::MemoryRef { base, offset } = &stmt.operand_dua {
+                        let region = if base == "rbp" { MemoryRegion::Stack(*offset) } else { MemoryRegion::Unknown };
+                        if region != MemoryRegion::Unknown {
+                            if let Some(existing_val) = available_loads.get(&region) {
+                                stmt.operand_dua = existing_val.clone();
+                            } else {
+                                if let TipeOperand::SsaVariable(_, _) = &stmt.operand_satu {
+                                    available_loads.insert(region.clone(), stmt.operand_satu.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                if let OperasiIr::Mov | OperasiIr::Add = stmt.operation_code {
+                     if let TipeOperand::MemoryRef { base, offset } = &stmt.operand_satu {
+                         let target_region = if base == "rbp" { MemoryRegion::Stack(*offset) } else { MemoryRegion::Unknown };
+                         if target_region != MemoryRegion::Unknown {
+                             available_loads.remove(&target_region);
+                         } else {
+                             available_loads.clear();
+                         }
+                     }
+                }
+            }
+        }
     }
     fn hitung_usage(&self, cfg: &ControlFlowGraph) -> HashMap<String, usize> {
         let mut counts = HashMap::new();
@@ -97,7 +139,7 @@ impl ExpressionOptimizer {
                     stmt.operand_dua = replaced;
                 }
                 match stmt.operation_code {
-                    OperasiIr::Cmp | OperasiIr::Test | OperasiIr::Call => {
+                    OperasiIr::Cmp | OperasiIr::Test | OperasiIr::Call | OperasiIr::FCmp => {
                         if let Some(replaced) = self.try_fold_operand(&stmt.operand_satu, counts, defs, &mut folded) {
                             stmt.operand_satu = replaced;
                         }
@@ -129,7 +171,7 @@ impl ExpressionOptimizer {
                         if *def_op == OperasiIr::Mov {
                             return Some(def_src.clone());
                         } 
-                         return Some(def_src.clone());
+                        return Some(def_src.clone());
                     }
                 }
             }
@@ -175,6 +217,7 @@ impl ExpressionOptimizer {
             TipeOperand::Expression { operasi, operand_kiri, operand_kanan } => {
                 self.simplify_operand(operand_kiri);
                 self.simplify_operand(operand_kanan);
+                
                 if *operasi == OperasiIr::Add {
                     if let TipeOperand::Immediate(0) = **operand_kanan {
                         *op = *operand_kiri.clone();
@@ -184,6 +227,12 @@ impl ExpressionOptimizer {
                 if *operasi == OperasiIr::Imul {
                     if let TipeOperand::Immediate(1) = **operand_kanan {
                         *op = *operand_kiri.clone();
+                        return;
+                    }
+                }
+                if *operasi == OperasiIr::Imul {
+                    if let TipeOperand::Immediate(0) = **operand_kanan {
+                        *op = TipeOperand::Immediate(0);
                         return;
                     }
                 }

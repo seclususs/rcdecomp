@@ -10,3 +10,4 @@ pub mod std_lib;
 pub mod recursive_descent;
 pub mod indirect_jump;
 pub mod expression_optimizer;
+pub mod alias_analysis;

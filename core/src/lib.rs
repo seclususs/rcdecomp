@@ -91,13 +91,13 @@ pub extern "C" fn muat_file_biner(
                         let mut ssa_trans = analysis::ssa::SsaTransformer::new();
                         ssa_trans.lakukan_transformasi_ssa(&mut cfg, &dom_tree);
                         ssa_trans.optimasi_propagasi_konstanta(&mut cfg);
-                        let expr_opt = analysis::expression_optimizer::ExpressionOptimizer::new();
+                        let mut expr_opt = analysis::expression_optimizer::ExpressionOptimizer::new();
                         expr_opt.jalankan_optimasi(&mut cfg);
                         ssa_trans.optimasi_dead_code(&mut cfg); 
                         let calling_conv = analysis::calling_convention::CallingConventionAnalyzer::new(arsitektur.as_ref());
                         let params = calling_conv.deteksi_entry_params(&cfg);
                         let mut structurer = analysis::structuring::ControlFlowStructurer::new();
-                        let ast = structurer.bangun_tree_struktur(&cfg);
+                        let ast = structurer.bangun_tree_struktur(&mut cfg);
                         let nama_fungsi = if let Some(sym) = vmem.simbol_global.get(func_addr) {
                             sym.clone()
                         } else if *func_addr == vmem.entry_point {
