@@ -12,6 +12,11 @@ pub enum NodeAst {
         true_branch: Box<NodeAst>,
         false_branch: Option<Box<NodeAst>>,
     },
+    Switch {
+        variable: String,
+        cases: Vec<(u64, NodeAst)>,
+        default: Option<Box<NodeAst>>,
+    },
     WhileLoop {
         condition: String,
         body: Box<NodeAst>,
@@ -76,8 +81,52 @@ impl ControlFlowStructurer {
             let next_node = self.proses_node_recursif(cfg, successors[0], current_loop_header);
             return NodeAst::Sequence(vec![node_block, next_node]);
         } else if successors.len() == 2 {
-            let true_node = self.proses_node_recursif(cfg, successors[0], current_loop_header);
-            let false_node = self.proses_node_recursif(cfg, successors[1], current_loop_header);
+            let s_true = successors[0];
+            let s_false = successors[1];
+            if let Some(block_b) = cfg.blocks.get(&s_true) {
+                if block_b.successors.len() == 2 {
+                    let b_true = block_b.successors[0];
+                    let b_false = block_b.successors[1];
+                    if b_false == s_false && !self.visited.contains(&s_true) {
+                        let cond_a = self.rekonstruksi_kondisi(&block.instruksi_list);
+                        let cond_b = self.rekonstruksi_kondisi(&block_b.instruksi_list);
+                        self.visited.insert(s_true);
+                        let true_node = self.proses_node_recursif(cfg, b_true, current_loop_header);
+                        let false_node = self.proses_node_recursif(cfg, s_false, current_loop_header);
+                        return NodeAst::Sequence(vec![
+                            node_block,
+                            NodeAst::IfElse {
+                                condition: format!("({}) && ({})", cond_a, cond_b),
+                                true_branch: Box::new(true_node),
+                                false_branch: Some(Box::new(false_node)),
+                            }
+                        ]);
+                    }
+                }
+            }
+            if let Some(block_b) = cfg.blocks.get(&s_false) {
+                if block_b.successors.len() == 2 {
+                    let b_true = block_b.successors[0];
+                    let b_false = block_b.successors[1];
+                    if b_true == s_true && !self.visited.contains(&s_false) {
+                        let cond_a = self.rekonstruksi_kondisi(&block.instruksi_list);
+                        let cond_b = self.rekonstruksi_kondisi(&block_b.instruksi_list);
+                        self.visited.insert(s_false);
+                        let true_node = self.proses_node_recursif(cfg, s_true, current_loop_header);
+                        let false_node = self.proses_node_recursif(cfg, b_false, current_loop_header);
+                        return NodeAst::Sequence(vec![
+                            node_block,
+                            NodeAst::IfElse {
+                                condition: format!("({}) || ({})", cond_a, cond_b),
+                                true_branch: Box::new(true_node),
+                                false_branch: Some(Box::new(false_node)),
+                            }
+                        ]);
+                    }
+                }
+            }
+            let true_node = self.proses_node_recursif(cfg, s_true, current_loop_header);
+            let false_node = self.proses_node_recursif(cfg, s_false, current_loop_header);
             let cond_str = self.rekonstruksi_kondisi(&block.instruksi_list);
             return NodeAst::Sequence(vec![
                 node_block,
@@ -87,8 +136,36 @@ impl ControlFlowStructurer {
                     false_branch: Some(Box::new(false_node)),
                 }
             ]);
+        } else {
+            let switch_var = self.analisa_variabel_switch(&block.instruksi_list);
+            let mut cases = Vec::new();
+            for (idx, &succ_id) in successors.iter().enumerate() {
+                let case_body = self.proses_node_recursif(cfg, succ_id, current_loop_header);
+                cases.push((idx as u64, case_body));
+            }
+            return NodeAst::Sequence(vec![
+                node_block,
+                NodeAst::Switch {
+                    variable: switch_var,
+                    cases: cases,
+                    default: None,
+                }
+            ]);
         }
-        node_block
+    }
+    fn analisa_variabel_switch(&self, stmts: &[StatementIr]) -> String {
+        if let Some(last) = stmts.last() {
+            if last.operation_code == OperasiIr::Jmp {
+                if let TipeOperand::MemoryRef { base: _, offset: _ } = &last.operand_satu {
+                    return "switch_idx".to_string();
+                }
+                if let TipeOperand::Expression { operasi: _, operand_kiri, operand_kanan: _ } = &last.operand_satu {
+                    return self.format_operand_simpel(operand_kiri);
+                }
+                return self.format_operand_simpel(&last.operand_satu);
+            }
+        }
+        "unknown_switch_var".to_string()
     }
     fn rekonstruksi_kondisi(&self, stmts: &[StatementIr]) -> String {
         if stmts.is_empty() {
@@ -136,6 +213,9 @@ impl ControlFlowStructurer {
                 }
             },
             TipeOperand::Memory(addr) => format!("*(long*)0x{:x}", addr),
+            TipeOperand::Expression { operasi: _, operand_kiri, operand_kanan: _ } => {
+                 self.format_operand_simpel(operand_kiri)
+            },
             TipeOperand::None => "0".to_string(),
         }
     }

@@ -65,16 +65,16 @@ impl SsaTransformer {
         let mut variabel_terpakai: HashSet<String> = HashSet::new();
         for block in cfg.blocks.values() {
             for stmt in &block.instruksi_list {
-                if let TipeOperand::SsaVariable(name, ver) = &stmt.operand_dua {
-                    variabel_terpakai.insert(format!("{}_{}", name, ver));
-                }
+                self.kumpulkan_usage_dari_operand(&stmt.operand_dua, &mut variabel_terpakai);
                 match stmt.operation_code {
                     OperasiIr::Cmp | OperasiIr::Test => {
-                        if let TipeOperand::SsaVariable(name, ver) = &stmt.operand_satu {
-                            variabel_terpakai.insert(format!("{}_{}", name, ver));
-                        }
+                        self.kumpulkan_usage_dari_operand(&stmt.operand_satu, &mut variabel_terpakai);
                     },
                     _ => {}
+                }
+                if let TipeOperand::Expression { operand_kiri, operand_kanan, .. } = &stmt.operand_dua {
+                    self.kumpulkan_usage_dari_operand(operand_kiri, &mut variabel_terpakai);
+                    self.kumpulkan_usage_dari_operand(operand_kanan, &mut variabel_terpakai);
                 }
             }
         }
@@ -93,6 +93,92 @@ impl SsaTransformer {
                     }
                 }
             });
+        }
+    }
+    fn kumpulkan_usage_dari_operand(&self, op: &TipeOperand, set_terpakai: &mut HashSet<String>) {
+        match op {
+            TipeOperand::SsaVariable(name, ver) => {
+                set_terpakai.insert(format!("{}_{}", name, ver));
+            },
+            TipeOperand::Expression { operand_kiri, operand_kanan, .. } => {
+                self.kumpulkan_usage_dari_operand(operand_kiri, set_terpakai);
+                self.kumpulkan_usage_dari_operand(operand_kanan, set_terpakai);
+            },
+            _ => {}
+        }
+    }
+    pub fn lakukan_expression_folding(&self, cfg: &mut ControlFlowGraph) {
+        let mut hitung_usage: HashMap<String, usize> = HashMap::new();
+        for block in cfg.blocks.values() {
+            for stmt in &block.instruksi_list {
+                self.tambah_hitung_usage(&stmt.operand_dua, &mut hitung_usage);
+                match stmt.operation_code {
+                    OperasiIr::Cmp | OperasiIr::Test => {
+                        self.tambah_hitung_usage(&stmt.operand_satu, &mut hitung_usage);
+                    },
+                    _ => {}
+                }
+            }
+        }
+        let mut peta_definisi_foldable: HashMap<String, (OperasiIr, TipeOperand, TipeOperand)> = HashMap::new();
+        for block in cfg.blocks.values() {
+            for stmt in &block.instruksi_list {
+                match stmt.operation_code {
+                    OperasiIr::Add | OperasiIr::Sub | OperasiIr::Imul => {
+                         if let TipeOperand::SsaVariable(name, ver) = &stmt.operand_satu {
+                             let key = format!("{}_{}", name, ver);
+                             if let Some(&count) = hitung_usage.get(&key) {
+                                 if count == 1 {
+                                     peta_definisi_foldable.insert(key, (
+                                         stmt.operation_code.clone(),
+                                         stmt.operand_satu.clone(),
+                                         stmt.operand_dua.clone()
+                                     ));
+                                 }
+                             }
+                         }
+                    },
+                    _ => {}
+                }
+            }
+        }
+        for block in cfg.blocks.values_mut() {
+            for stmt in &mut block.instruksi_list {
+                if let TipeOperand::SsaVariable(name, ver) = &stmt.operand_dua {
+                    let key = format!("{}_{}", name, ver);
+                    if let Some((op_asal, _, src_asal)) = peta_definisi_foldable.get(&key) {
+                        if *op_asal == OperasiIr::Mov {
+                            stmt.operand_dua = src_asal.clone();
+                        }
+                    }
+                }
+                 match stmt.operation_code {
+                    OperasiIr::Cmp | OperasiIr::Test => {
+                        if let TipeOperand::SsaVariable(name, ver) = &stmt.operand_satu {
+                            let key = format!("{}_{}", name, ver);
+                             if let Some((op_asal, _, src_asal)) = peta_definisi_foldable.get(&key) {
+                                 if *op_asal == OperasiIr::Mov {
+                                     stmt.operand_satu = src_asal.clone();
+                                 }
+                             }
+                        }
+                    },
+                    _ => {}
+                }
+            }
+        }
+    }
+    fn tambah_hitung_usage(&self, op: &TipeOperand, map: &mut HashMap<String, usize>) {
+        match op {
+            TipeOperand::SsaVariable(name, ver) => {
+                let key = format!("{}_{}", name, ver);
+                *map.entry(key).or_insert(0) += 1;
+            },
+            TipeOperand::Expression { operand_kiri, operand_kanan, .. } => {
+                self.tambah_hitung_usage(operand_kiri, map);
+                self.tambah_hitung_usage(operand_kanan, map);
+            },
+            _ => {}
         }
     }
     fn sisipkan_phi_nodes(&self, cfg: &mut ControlFlowGraph, dom_tree: &DominatorTree) {

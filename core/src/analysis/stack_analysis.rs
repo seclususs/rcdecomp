@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use crate::ir::types::{StatementIr, TipeOperand};
+use crate::arch::Architecture;
 
 #[derive(Debug, Clone)]
 pub struct StackVariable {
@@ -20,17 +21,17 @@ impl StackFrame {
             frame_size: 0,
         }
     }
-    pub fn analisis_stack_frame(stmts: &[StatementIr]) -> Self {
+    pub fn analisis_stack_frame(stmts: &[StatementIr], arch: &dyn Architecture) -> Self {
         let mut frame = Self::new();
         for stmt in stmts {
-            frame.periksa_operand(&stmt.operand_satu);
-            frame.periksa_operand(&stmt.operand_dua);
+            frame.periksa_operand(&stmt.operand_satu, arch);
+            frame.periksa_operand(&stmt.operand_dua, arch);
         }
         frame
     }
-    fn periksa_operand(&mut self, op: &TipeOperand) {
+    fn periksa_operand(&mut self, op: &TipeOperand, arch: &dyn Architecture) {
         if let TipeOperand::MemoryRef { base, offset } = op {
-            if base == "rbp" {
+            if base == &arch.dapatkan_frame_pointer() {
                 if !self.daftar_variabel.contains_key(offset) {
                     let nama = if *offset < 0 {
                         format!("var_{}", offset.abs())

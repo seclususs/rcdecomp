@@ -5,6 +5,11 @@ pub enum TipeOperand {
     Immediate(i64),
     Memory(u64),
     MemoryRef { base: String, offset: i64 },
+    Expression {
+        operasi: OperasiIr,
+        operand_kiri: Box<TipeOperand>,
+        operand_kanan: Box<TipeOperand>,
+    },
     None,
 }
 

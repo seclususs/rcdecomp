@@ -91,6 +91,8 @@ impl ControlFlowGraph {
                     OperasiIr::Jmp => {
                         if let crate::ir::types::TipeOperand::Immediate(val) = stmt.operand_satu {
                             targets.push(val as u64);
+                        } else {
+                            
                         }
                     },
                     OperasiIr::Je | OperasiIr::Jne => {
