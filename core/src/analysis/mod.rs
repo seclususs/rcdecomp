@@ -6,3 +6,7 @@ pub mod stack_analysis;
 pub mod dominator;
 pub mod ssa;
 pub mod calling_convention;
+pub mod std_lib;
+pub mod recursive_descent;
+pub mod indirect_jump;
+pub mod expression_optimizer;

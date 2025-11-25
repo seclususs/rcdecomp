@@ -32,16 +32,19 @@ impl ControlFlowGraph {
             entry_point: 0,
         }
     }
-    pub fn bangun_execution_graph(statements: Vec<StatementIr>) -> Self {
+    pub fn bangun_execution_graph(
+        statements: Vec<StatementIr>, 
+        jump_table_targets: &HashMap<u64, Vec<u64>>
+    ) -> Self {
         let mut cfg = Self::inisialisasi_graph_kosong();
         if statements.is_empty() {
             return cfg;
         }
         cfg.entry_point = statements[0].address_asal;
-        let leaders = cfg.identifikasi_leaders(&statements);
+        let leaders = cfg.identifikasi_leaders(&statements, jump_table_targets);
         let mut current_block = BasicBlock::new(statements[0].address_asal);
         for stmt in statements {
-            if leaders.contains(&stmt.address_asal) && current_block.instruksi_list.len() > 0 {
+            if leaders.contains(&stmt.address_asal) && !current_block.instruksi_list.is_empty() {
                 cfg.blocks.insert(current_block.id_block, current_block);
                 current_block = BasicBlock::new(stmt.address_asal);
             }
@@ -50,17 +53,34 @@ impl ControlFlowGraph {
         if !current_block.instruksi_list.is_empty() {
             cfg.blocks.insert(current_block.id_block, current_block);
         }
-        cfg.hubungkan_edges();
+        cfg.hubungkan_edges(jump_table_targets);
         cfg
     }
-    fn identifikasi_leaders(&self, stmts: &[StatementIr]) -> HashSet<u64> {
+    fn identifikasi_leaders(
+        &self, 
+        stmts: &[StatementIr], 
+        jump_targets: &HashMap<u64, Vec<u64>>
+    ) -> HashSet<u64> {
         let mut leaders = HashSet::new();
         if let Some(first) = stmts.first() {
             leaders.insert(first.address_asal);
         }
         for (i, stmt) in stmts.iter().enumerate() {
             match stmt.operation_code {
-                OperasiIr::Jmp | OperasiIr::Je | OperasiIr::Jne | OperasiIr::Call => {
+                OperasiIr::Jmp => {
+                    if let crate::ir::types::TipeOperand::Immediate(target) = stmt.operand_satu {
+                        leaders.insert(target as u64);
+                    }
+                    if let Some(targets) = jump_targets.get(&stmt.address_asal) {
+                        for &t in targets {
+                            leaders.insert(t);
+                        }
+                    }
+                    if i + 1 < stmts.len() {
+                        leaders.insert(stmts[i + 1].address_asal);
+                    }
+                },
+                OperasiIr::Je | OperasiIr::Jne | OperasiIr::Call => {
                     if let crate::ir::types::TipeOperand::Immediate(target) = stmt.operand_satu {
                         leaders.insert(target as u64);
                     }
@@ -78,7 +98,7 @@ impl ControlFlowGraph {
         }
         leaders
     }
-    fn hubungkan_edges(&mut self) {
+    fn hubungkan_edges(&mut self, jump_targets: &HashMap<u64, Vec<u64>>) {
         let block_ids: Vec<u64> = self.blocks.keys().cloned().collect();
         for id in block_ids {
             let last_instr = {
@@ -91,8 +111,8 @@ impl ControlFlowGraph {
                     OperasiIr::Jmp => {
                         if let crate::ir::types::TipeOperand::Immediate(val) = stmt.operand_satu {
                             targets.push(val as u64);
-                        } else {
-                            
+                        } else if let Some(indirect_list) = jump_targets.get(&stmt.address_asal) {
+                            targets.extend(indirect_list);
                         }
                     },
                     OperasiIr::Je | OperasiIr::Jne => {

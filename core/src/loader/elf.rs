@@ -1,80 +1,57 @@
 use std::fs;
 use std::path::Path;
-use std::collections::HashMap;
-use goblin::elf::Elf;
-use log::debug;
+use goblin::elf::{Elf, section_header};
+use crate::loader::memory::{VirtualMemory, IzinAkses};
 
 pub struct ElfParser {
     pub file_path: String,
-    pub is_64bit: bool,
 }
 
 impl ElfParser {
     pub fn new(path: &str) -> Self {
         Self {
             file_path: path.to_string(),
-            is_64bit: false,
         }
     }
-    pub fn validasi_magic_number(&self, header_bytes: &[u8]) -> bool {
-        if header_bytes.len() < 4 {
-            return false;
-        }
-        header_bytes[0] == 0x7F && 
-        header_bytes[1] == b'E' && 
-        header_bytes[2] == b'L' && 
-        header_bytes[3] == b'F'
-    }
-    pub fn baca_section_header(&self) {
-        debug!("Membaca section header dari {}", self.file_path);
-    }
-    pub fn hitung_entry_point(&self, buffer: &[u8]) -> Result<u64, String> {
-        let elf = Elf::parse(buffer).map_err(|e| e.to_string())?;
-        Ok(elf.entry)
-    }
-    pub fn ekstrak_kode_mentah(&mut self) -> Result<(Vec<u8>, u64, String, HashMap<u64, String>), String> {
+    pub fn muat_virtual_memory(&mut self) -> Result<VirtualMemory, String> {
         let path = Path::new(&self.file_path);
         let buffer = fs::read(path).map_err(|e| e.to_string())?;
-        if !self.validasi_magic_number(&buffer) {
-            return Err("Invalid ELF magic bytes".to_string());
-        }
         let elf = Elf::parse(&buffer).map_err(|e| e.to_string())?;
-        self.is_64bit = elf.is_64;
-        let entry_point = elf.entry;
         let arch_str = if elf.is_64 { "x86_64" } else { "x86" };
-        let mut symbol_map = HashMap::new();
+        let mut vmem = VirtualMemory::baru(elf.entry, arch_str);
+        for section in &elf.section_headers {
+            if section.sh_flags & (section_header::SHF_ALLOC as u64) != 0 {
+                let start = section.sh_offset as usize;
+                let size = section.sh_size as usize;
+                if start + size <= buffer.len() {
+                    let data = buffer[start..start+size].to_vec();
+                    let mut perm_val = 0;
+                    if section.sh_flags & (section_header::SHF_WRITE as u64) != 0 { perm_val |= 2; }
+                    if section.sh_flags & (section_header::SHF_EXECINSTR as u64) != 0 { perm_val |= 4; }
+                    perm_val |= 1;
+                    let nama = if let Some(n) = elf.shdr_strtab.get_at(section.sh_name) {
+                        n.to_string()
+                    } else {
+                        "unknown".to_string()
+                    };
+                    vmem.tambah_segment(section.sh_addr, data, IzinAkses::from_u32(perm_val), nama);
+                }
+            }
+        }
         for sym in &elf.syms {
             if let Some(name) = elf.strtab.get_at(sym.st_name) {
                 if !name.is_empty() && sym.st_value != 0 {
-                    symbol_map.insert(sym.st_value, name.to_string());
+                    vmem.simbol_global.insert(sym.st_value, name.to_string());
                 }
             }
         }
         for sym in &elf.dynsyms {
             if let Some(name) = elf.dynstrtab.get_at(sym.st_name) {
                 if !name.is_empty() && sym.st_value != 0 {
-                    symbol_map.insert(sym.st_value, name.to_string());
+                    vmem.simbol_global.insert(sym.st_value, name.to_string());
                 }
             }
         }
-        let mut code_bytes = Vec::new();
-        let mut found_text = false;
-        for section in elf.section_headers {
-            if let Some(name) = elf.shdr_strtab.get_at(section.sh_name) {
-                if name == ".text" {
-                    let start = section.sh_offset as usize;
-                    let end = start + section.sh_size as usize;
-                    if end <= buffer.len() {
-                        code_bytes = buffer[start..end].to_vec();
-                        found_text = true;
-                    }
-                    break;
-                }
-            }
-        }
-        if !found_text {
-            return Err("Section .text tidak ditemukan".to_string());
-        }
-        Ok((code_bytes, entry_point, arch_str.to_string(), symbol_map))
+        Ok(vmem)
     }
 }

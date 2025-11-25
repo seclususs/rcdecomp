@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use crate::analysis::structuring::NodeAst;
-use crate::analysis::type_inference::TypeSystem;
+use crate::analysis::type_inference::{TypeSystem, TipePrimitif};
 use crate::analysis::stack_analysis::StackFrame;
 use crate::ir::types::{StatementIr, OperasiIr, TipeOperand};
 use crate::arch::Architecture;
@@ -13,31 +13,39 @@ impl CEmitter {
     pub fn new() -> Self {
         Self { indent_level: 0 }
     }
-    pub fn hasilkan_kode_c(
-        &mut self, 
-        ast: &NodeAst, 
-        types: &TypeSystem, 
-        stack_frame: &StackFrame,
-        symbol_map: &HashMap<u64, String>,
-        entry_params: &[String],
-        arch: &dyn Architecture
-    ) -> String {
+    pub fn generate_header_includes(&self) -> String {
         let mut source = String::from("// Decompiled by RCDecomp\n");
         source.push_str("#include <stdio.h>\n");
-        source.push_str("#include <stdbool.h>\n\n");
-        if !types.definisi_struct.is_empty() {
+        source.push_str("#include <stdbool.h>\n");
+        source.push_str("#include <stdint.h>\n\n");
+        source
+    }
+    pub fn generate_struct_defs(&self, types: &TypeSystem) -> String {
+        let mut source = String::new();
+        let struct_defs = types.definisi_struct();
+        if !struct_defs.is_empty() {
             source.push_str("// Detected Structures\n");
-            for (nama, fields) in &types.definisi_struct {
+            for (nama, fields) in &struct_defs {
                 source.push_str(&format!("typedef struct {} {{\n", nama));
-                for (offset, _) in fields {
-                    source.push_str(&format!("    long field_{};\n", offset));
+                for (offset, tipe_str) in fields {
+                    source.push_str(&format!("    {} field_{};\n", tipe_str, offset));
                 }
                 source.push_str(&format!("}} {};\n\n", nama));
             }
         }
-        source.push_str("// Register Variables (SSA Mode)\n");
-        source.push_str("// (Implicit declarations for SSA variables)\n");
-        source.push_str("\n");
+        source
+    }
+    pub fn hasilkan_fungsi_tunggal(
+        &mut self,
+        func_name: &str,
+        ast: &NodeAst, 
+        types: &TypeSystem, 
+        stack_frame: &StackFrame,
+        symbol_map: &BTreeMap<u64, String>,
+        entry_params: &[String],
+        arch: &dyn Architecture
+    ) -> String {
+        let mut source = String::new();
         let params_str = if entry_params.is_empty() {
             "void".to_string()
         } else {
@@ -48,24 +56,30 @@ impl CEmitter {
             }).collect();
             p.join(", ")
         };
-        source.push_str(&format!("void entry_function({}) {{\n", params_str));
-        self.indent_level += 1;
-        if !stack_frame.daftar_variabel.is_empty() {
+        source.push_str(&format!("void {}({}) {{\n", func_name, params_str));
+        self.indent_level = 1;
+        if !stack_frame.map_offset_variabel.is_empty() {
             let indent = "    ".repeat(self.indent_level);
             source.push_str(&format!("{}// Local Stack Variables\n", indent));
-            let mut vars: Vec<_> = stack_frame.daftar_variabel.values().collect();
-            vars.sort_by_key(|v| v.offset);
-            for var in vars {
-                source.push_str(&format!("{}{} {}; // [rbp {:+}]\n", indent, var.tipe_data, var.nama_var, var.offset));
+            let mut all_vars = Vec::new();
+            for vars in stack_frame.map_offset_variabel.values() {
+                for var in vars {
+                    all_vars.push(var);
+                }
+            }
+            all_vars.sort_by(|a, b| a.offset.cmp(&b.offset).then(a.nama_var.cmp(&b.nama_var)));
+            for var in all_vars {
+                let addr_taken_marker = if var.is_address_taken { " // &addr_taken" } else { "" };
+                source.push_str(&format!("{}{} {}; // [fp {:+}]{}\n", 
+                    indent, var.tipe_data, var.nama_var, var.offset, addr_taken_marker));
             }
             source.push_str("\n");
         }
         source.push_str(&self.emit_node_ast(ast, types, stack_frame, symbol_map, arch));
-        self.indent_level -= 1;
-        source.push_str("}\n");
+        source.push_str("}\n\n");
         source
     }
-    fn emit_node_ast(&mut self, node: &NodeAst, types: &TypeSystem, stack_frame: &StackFrame, symbol_map: &HashMap<u64, String>, arch: &dyn Architecture) -> String {
+    fn emit_node_ast(&mut self, node: &NodeAst, types: &TypeSystem, stack_frame: &StackFrame, symbol_map: &BTreeMap<u64, String>, arch: &dyn Architecture) -> String {
         let mut code = String::new();
         let indent = "    ".repeat(self.indent_level);
         match node {
@@ -112,7 +126,7 @@ impl CEmitter {
                 self.indent_level -= 1;
                 code.push_str(&format!("{}}}\n", indent));
             },
-            NodeAst::WhileLoop { condition, body } => {
+            NodeAst::WhileLoop { condition, body, is_do_while: _ } => {
                 code.push_str(&format!("{}while ({}) {{\n", indent, condition));
                 self.indent_level += 1;
                 code.push_str(&self.emit_node_ast(body, types, stack_frame, symbol_map, arch));
@@ -127,43 +141,38 @@ impl CEmitter {
             },
             NodeAst::Continue => {
                 code.push_str(&format!("{}continue;\n", indent));
-            }
+            },
+            NodeAst::Empty => {}
         }
         code
     }
-    fn konversi_stmt_ke_c(&self, stmt: &StatementIr, types: &TypeSystem, stack_frame: &StackFrame, symbol_map: &HashMap<u64, String>, arch: &dyn Architecture) -> String {
+    fn konversi_stmt_ke_c(&self, stmt: &StatementIr, types: &TypeSystem, stack_frame: &StackFrame, symbol_map: &BTreeMap<u64, String>, arch: &dyn Architecture) -> String {
         let label = format!("addr_0x{:x}: ", stmt.address_asal);
+        match stmt.operation_code {
+             OperasiIr::Mov | 
+             OperasiIr::Add | OperasiIr::Sub | OperasiIr::Imul | OperasiIr::Div |
+             OperasiIr::And | OperasiIr::Or | OperasiIr::Xor | 
+             OperasiIr::Shl | OperasiIr::Shr => {
+                let op1 = self.format_operand(&stmt.operand_satu, types, stack_frame, arch, stmt.address_asal);
+                let op2 = self.format_operand(&stmt.operand_dua, types, stack_frame, arch, stmt.address_asal);
+                return format!("{}{} = {};", label, op1, op2);
+            },
+            _ => {}
+        }
         let operation = match stmt.operation_code {
-            OperasiIr::Mov => {
-                let op1 = self.format_operand(&stmt.operand_satu, types, stack_frame, arch);
-                let op2 = self.format_operand(&stmt.operand_dua, types, stack_frame, arch);
-                format!("{} = {};", op1, op2)
-            },
-            OperasiIr::Add => {
-                let op1 = self.format_operand(&stmt.operand_satu, types, stack_frame, arch);
-                let op2 = self.format_operand(&stmt.operand_dua, types, stack_frame, arch);
-                format!("{} += {};", op1, op2)
-            },
-            OperasiIr::Sub => {
-                let op1 = self.format_operand(&stmt.operand_satu, types, stack_frame, arch);
-                let op2 = self.format_operand(&stmt.operand_dua, types, stack_frame, arch);
-                format!("{} -= {};", op1, op2)
-            },
             OperasiIr::Call => {
                 let func_name = if let TipeOperand::Immediate(addr) = stmt.operand_satu {
                     if let Some(sym) = symbol_map.get(&(addr as u64)) {
                         sym.clone()
                     } else {
-                        self.format_operand(&stmt.operand_satu, types, stack_frame, arch)
+                        format!("sub_{:x}", addr)
                     }
                 } else {
-                    self.format_operand(&stmt.operand_satu, types, stack_frame, arch)
+                    self.format_operand(&stmt.operand_satu, types, stack_frame, arch, stmt.address_asal)
                 };
                 let mut args_str = Vec::new();
                 for arg in &stmt.operand_tambahan {
-                    if let TipeOperand::SsaVariable(_, _) = arg {
-                         args_str.push(self.format_operand(arg, types, stack_frame, arch));
-                    }
+                     args_str.push(self.format_operand(arg, types, stack_frame, arch, stmt.address_asal));
                 }
                 if args_str.is_empty() {
                     format!("{}(...);", func_name)
@@ -173,9 +182,9 @@ impl CEmitter {
             },
             OperasiIr::Ret => "return;".to_string(),
             OperasiIr::Phi => {
-                let target = self.format_operand(&stmt.operand_satu, types, stack_frame, arch);
+                let target = self.format_operand(&stmt.operand_satu, types, stack_frame, arch, stmt.address_asal);
                 let args: Vec<String> = stmt.operand_tambahan.iter()
-                    .map(|op| self.format_operand(op, types, stack_frame, arch))
+                    .map(|op| self.format_operand(op, types, stack_frame, arch, stmt.address_asal))
                     .collect();
                 format!("{} = PHI({});", target, args.join(", "))
             }
@@ -183,18 +192,25 @@ impl CEmitter {
         };
         format!("{}{}", label, operation)
     }
-    fn format_operand(&self, op: &TipeOperand, types: &TypeSystem, stack_frame: &StackFrame, arch: &dyn Architecture) -> String {
+    fn format_operand(
+        &self, 
+        op: &TipeOperand, 
+        types: &TypeSystem, 
+        stack_frame: &StackFrame, 
+        arch: &dyn Architecture,
+        current_addr: u64
+    ) -> String {
         match op {
             TipeOperand::Register(r) => r.clone(),
             TipeOperand::SsaVariable(name, ver) => format!("{}_{}", name, ver),
             TipeOperand::Immediate(val) => format!("0x{:x}", val),
             TipeOperand::Memory(addr) => format!("*(long*)0x{:x}", addr),
             TipeOperand::MemoryRef { base, offset } => {
-                if let Some(crate::analysis::type_inference::JenisTipe::Struct { .. }) = types.tabel_tipe.get(base) {
-                    return format!("{}->field_{}", base, offset);
+                if let Some(TipePrimitif::Struct(_)) = types.variable_types.get(base) {
+                     return format!("{}->field_{}", base, offset);
                 }
                 if base == &arch.dapatkan_frame_pointer() {
-                    if let Some(nama) = stack_frame.ambil_nama_variabel(*offset) {
+                    if let Some(nama) = stack_frame.ambil_variabel_kontekstual(*offset, current_addr) {
                         return nama;
                     }
                 }
@@ -202,21 +218,18 @@ impl CEmitter {
                 format!("*(long*)({} {} {})", base, sign, offset)
             },
             TipeOperand::Expression { operasi, operand_kiri, operand_kanan } => {
-                if *operasi == OperasiIr::Add {
-                    if let TipeOperand::Expression { operasi: op_mul, operand_kiri: idx, operand_kanan: _scale } = &**operand_kanan {
-                        if *op_mul == OperasiIr::Imul {
-                            let base_str = self.format_operand(operand_kiri, types, stack_frame, arch);
-                            let index_str = self.format_operand(idx, types, stack_frame, arch);
-                            return format!("{}[{}]", base_str, index_str);
-                        }
-                    }
-                }
-                let kiri_str = self.format_operand(operand_kiri, types, stack_frame, arch);
-                let kanan_str = self.format_operand(operand_kanan, types, stack_frame, arch);
+                let kiri_str = self.format_operand(operand_kiri, types, stack_frame, arch, current_addr);
+                let kanan_str = self.format_operand(operand_kanan, types, stack_frame, arch, current_addr);
                 let op_symbol = match operasi {
                     OperasiIr::Add => "+",
                     OperasiIr::Sub => "-",
                     OperasiIr::Imul => "*",
+                    OperasiIr::Div => "/",
+                    OperasiIr::And => "&",
+                    OperasiIr::Or => "|",
+                    OperasiIr::Xor => "^",
+                    OperasiIr::Shl => "<<",
+                    OperasiIr::Shr => ">>",
                     _ => "?",
                 };
                 format!("({} {} {})", kiri_str, op_symbol, kanan_str)

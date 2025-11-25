@@ -1,4 +1,5 @@
 pub mod x86;
+pub mod arm64;
 
 pub trait Architecture {
     fn dapatkan_stack_pointer(&self) -> String;

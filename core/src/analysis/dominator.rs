@@ -3,6 +3,7 @@ use crate::analysis::cfg::ControlFlowGraph;
 
 pub struct DominatorTree {
     pub peta_idom: HashMap<u64, u64>,
+    pub peta_post_idom: HashMap<u64, u64>,
     pub list_back_edges: Vec<(u64, u64)>,
     pub peta_children: HashMap<u64, Vec<u64>>,
     pub frontier_dominasi: HashMap<u64, HashSet<u64>>,
@@ -12,6 +13,7 @@ impl DominatorTree {
     pub fn new() -> Self {
         Self {
             peta_idom: HashMap::new(),
+            peta_post_idom: HashMap::new(),
             list_back_edges: Vec::new(),
             peta_children: HashMap::new(),
             frontier_dominasi: HashMap::new(),
@@ -21,21 +23,39 @@ impl DominatorTree {
         if cfg.blocks.is_empty() {
             return;
         }
-        let entry = cfg.entry_point;
+        self.peta_idom = self.kalkulasi_idom_generic(cfg, cfg.entry_point, true);
+        let mut exit_nodes = Vec::new();
+        for (id, block) in &cfg.blocks {
+            if block.successors.is_empty() {
+                exit_nodes.push(*id);
+            }
+        }
+        if let Some(&virtual_exit) = exit_nodes.last() {
+             self.peta_post_idom = self.kalkulasi_idom_generic(cfg, virtual_exit, false);
+        }
+        self.bangun_peta_children(); 
+        self.hitung_dominance_frontier(cfg); 
+        self.deteksi_back_edges(cfg);
+    }
+    fn kalkulasi_idom_generic(&self, cfg: &ControlFlowGraph, root: u64, is_forward: bool) -> HashMap<u64, u64> {
         let all_nodes: Vec<u64> = cfg.blocks.keys().cloned().collect();
         let mut doms: HashMap<u64, u64> = HashMap::new();
-        doms.insert(entry, entry);
+        doms.insert(root, root);
         let mut changed = true;
         while changed {
             changed = false;
             for &node in &all_nodes {
-                if node == entry { continue; }
-                let preds = &cfg.blocks[&node].predecessors;
-                if preds.is_empty() { continue; }
-                let mut processed_preds = preds.iter().filter(|p| doms.contains_key(p));
-                if let Some(&first_pred) = processed_preds.next() {
-                    let mut new_idom = first_pred;
-                    for &p in processed_preds {
+                if node == root { continue; }
+                let parents = if is_forward {
+                    &cfg.blocks[&node].predecessors
+                } else {
+                    &cfg.blocks[&node].successors
+                };
+                if parents.is_empty() { continue; }
+                let mut processed_parents = parents.iter().filter(|p| doms.contains_key(p));
+                if let Some(&first_parent) = processed_parents.next() {
+                    let mut new_idom = first_parent;
+                    for &p in processed_parents {
                         if doms.contains_key(&p) {
                             new_idom = self.cari_intersection(&doms, p, new_idom);
                         }
@@ -52,10 +72,7 @@ impl DominatorTree {
                 }
             }
         }
-        self.peta_idom = doms;
-        self.bangun_peta_children(); 
-        self.hitung_dominance_frontier(cfg); 
-        self.deteksi_back_edges(cfg);
+        doms
     }
     fn bangun_peta_children(&mut self) {
         for (&node, &parent) in &self.peta_idom {
@@ -84,8 +101,8 @@ impl DominatorTree {
     }
     fn cari_intersection(&self, doms: &HashMap<u64, u64>, mut b1: u64, mut b2: u64) -> u64 {
         let mut visited = HashSet::new();
-        while b1 != b2 {
-            if visited.contains(&b1) || visited.contains(&b2) { break; }
+        let mut iterations = 0; 
+        while b1 != b2 && iterations < 10000 {
             visited.insert(b1);
             visited.insert(b2);
             if let Some(&parent) = doms.get(&b1) {
@@ -95,6 +112,7 @@ impl DominatorTree {
                  if b2 != parent { b2 = parent; }
             }
             if b1 == b2 { return b1; }
+            iterations += 1;
         }
         b1
     }
@@ -109,10 +127,13 @@ impl DominatorTree {
     }
     pub fn cek_apakah_didominasi(&self, node: u64, dominator: u64) -> bool {
         let mut curr = node;
+        let mut iterations = 0;
         while let Some(&parent) = self.peta_idom.get(&curr) {
             if curr == dominator { return true; }
             if curr == parent { break; }
             curr = parent;
+            iterations += 1;
+            if iterations > 10000 { break; } 
         }
         false
     }

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
-use std::collections::HashMap;
 use goblin::mach::{Mach, MachO};
+use crate::loader::memory::{VirtualMemory, IzinAkses};
 
 pub struct MachoLoader {
     pub file_path: String,
@@ -13,12 +13,12 @@ impl MachoLoader {
             file_path: path.to_string(),
         }
     }
-    pub fn ekstrak_data_macho(&self) -> Result<(Vec<u8>, u64, String, HashMap<u64, String>), String> {
+    pub fn muat_virtual_memory(&self) -> Result<VirtualMemory, String> {
         let path = Path::new(&self.file_path);
         let buffer = fs::read(path).map_err(|e| e.to_string())?;
         match Mach::parse(&buffer).map_err(|e| e.to_string())? {
             Mach::Binary(macho) => {
-                self.parse_macho_tunggal(macho, &buffer)
+                self.parse_macho_ke_memory(macho, &buffer)
             },
             Mach::Fat(fat) => {
                 let mut selected_arch = None;
@@ -43,48 +43,38 @@ impl MachoLoader {
                     }
                     let slice_bytes = &buffer[start..start+size];
                     let macho = MachO::parse(slice_bytes, 0).map_err(|e| e.to_string())?;
-                    self.parse_macho_tunggal(macho, slice_bytes)
+                    self.parse_macho_ke_memory(macho, slice_bytes)
                 } else {
-                    Err("Tidak ditemukan slice arsitektur yang valid dalam Fat Binary".to_string())
+                    Err("Tidak ditemukan slice arsitektur yang valid".to_string())
                 }
             }
         }
     }
-    fn parse_macho_tunggal(&self, macho: MachO, data: &[u8]) -> Result<(Vec<u8>, u64, String, HashMap<u64, String>), String> {
+    fn parse_macho_ke_memory(&self, macho: MachO, data: &[u8]) -> Result<VirtualMemory, String> {
         let is_64 = macho.is_64;
         let arch_str = if is_64 { "x86_64" } else { "x86" };
-        let entry_point = macho.entry;
-        let mut code_bytes = Vec::new();
-        let mut found_text = false;
+        let mut vmem = VirtualMemory::baru(macho.entry, arch_str);
         for segment in &macho.segments {
-            if let Ok(seg_name) = segment.name() {
-                if seg_name == "__TEXT" {
-                    for (section, _) in &segment.sections().map_err(|e| e.to_string())? {
-                        if let Ok(sec_name) = section.name() {
-                            if sec_name == "__text" {
-                                let start = section.offset as usize;
-                                let size = section.size as usize;
-                                if start + size <= data.len() {
-                                    code_bytes = data[start..start+size].to_vec();
-                                    found_text = true;
-                                }
-                            }
-                        }
-                    }
+            for (section, _) in &segment.sections().map_err(|e| e.to_string())? {
+                let start = section.offset as usize;
+                let size = section.size as usize;
+                if start + size <= data.len() {
+                    let seg_data = data[start..start+size].to_vec();
+                    let mut perm_val = 1;
+                    if segment.initprot & 0x2 != 0 { perm_val |= 2; }
+                    if segment.initprot & 0x4 != 0 { perm_val |= 4; }
+                    let nama = section.name().unwrap_or("unknown").to_string();
+                    vmem.tambah_segment(section.addr, seg_data, IzinAkses::from_u32(perm_val), nama);
                 }
             }
         }
-        if !found_text {
-            return Err("Section __text tidak ditemukan dalam Mach-O".to_string());
-        }
-        let mut peta_simbol = HashMap::new();
         for sym in macho.symbols() {
             if let Ok((name, nlist)) = sym {
                 if nlist.n_value != 0 && !name.is_empty() {
-                        peta_simbol.insert(nlist.n_value, name.to_string());
+                    vmem.simbol_global.insert(nlist.n_value, name.to_string());
                 }
             }
         }
-        Ok((code_bytes, entry_point, arch_str.to_string(), peta_simbol))
+        Ok(vmem)
     }
 }
