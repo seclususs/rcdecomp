@@ -8,8 +8,9 @@ pub mod arch;
 use libc::{c_char, c_int};
 use std::ffi::CStr;
 use std::collections::HashMap;
-use log::{info, error, debug};
+use log::{info, error};
 use crate::arch::Architecture;
+use crate::loader::LoaderError;
 
 pub struct ContextDecompiler {
     pub is_initialized: bool,
@@ -48,27 +49,24 @@ pub extern "C" fn muat_file_biner(
         Ok(path_str) => {
             match loader::proses_muat_file(path_str) {
                 Ok(vmem) => {
-                    info!("Berhasil muat Virtual Memory untuk: {}", path_str);
-                    info!("Arsitektur Terdeteksi: {}", vmem.arsitektur);
+                    info!("Berhasil muat: {}", path_str);
+                    info!("Arsitektur: {}", vmem.arsitektur);
                     let arsitektur: Box<dyn Architecture> = if vmem.arsitektur == "x86_64" {
                         Box::new(arch::x86::X86Arsitektur64)
-                    } else if vmem.arsitektur == "aarch64" || vmem.arsitektur == "arm64" {
-                        info!("Menggunakan backend ARM64");
+                    } else if vmem.arsitektur.contains("arm") {
                         Box::new(arch::arm64::Arm64Arsitektur)
                     } else {
                         Box::new(arch::x86::X86Arsitektur64)
                     };
-                    info!("Memulai Recursive Descent Analysis...");
-                    let mut analyzer = analysis::recursive_descent::RecursiveDescent::new(&vmem.arsitektur);
+                    let mut analyzer = analysis::recovery::explorer::RecursiveDescent::new(&vmem.arsitektur);
                     analyzer.lakukan_analisis_full(&vmem);
                     let hasil_fungsi = analyzer.ambil_hasil_fungsi();
                     let jump_targets_map = &analyzer.global_jump_targets;
-                    info!("Ditemukan {} fungsi.", hasil_fungsi.len());
                     let mut all_source_code = String::new();
-                    let mut emitter = codegen::c_emitter::CEmitter::new();
+                    let mut emitter = codegen::c_gen::CEmitter::new();
                     all_source_code.push_str(&emitter.generate_header_includes());
-                    let mut type_sys = analysis::type_inference::TypeSystem::new();
-                    let std_lib_manager = analysis::std_lib::StdLibManager::new();
+                    let mut type_sys = analysis::recovery::types::TypeSystem::new();
+                    let std_lib_manager = analysis::recovery::std_lib::StdLibManager::new();
                     std_lib_manager.terapkan_signature_standar(&vmem.simbol_global, &mut type_sys);
                     let mut map_ir_global = HashMap::new();
                     for (addr, ctx) in hasil_fungsi {
@@ -81,22 +79,19 @@ pub extern "C" fn muat_file_biner(
                     for func_addr in fungsi_sorted {
                         let ctx = hasil_fungsi.get(func_addr).unwrap();
                         let ir_statements = &ctx.ir_code;
-                        let mut cfg = analysis::cfg::ControlFlowGraph::bangun_execution_graph(
-                            ir_statements.clone(),
-                            jump_targets_map 
-                        );
-                        let stack_frame = analysis::stack_analysis::StackFrame::analisis_stack_frame(ir_statements, arsitektur.as_ref());
-                        let mut dom_tree = analysis::dominator::DominatorTree::new();
+                        let mut cfg = analysis::graph::cfg::ControlFlowGraph::bangun_execution_graph(ir_statements.clone(), jump_targets_map);
+                        let stack_frame = analysis::recovery::stack::StackFrame::analisis_stack_frame(ir_statements, arsitektur.as_ref());
+                        let mut dom_tree = analysis::graph::dom::DominatorTree::new();
                         dom_tree.hitung_dominators(&cfg);
-                        let mut ssa_trans = analysis::ssa::SsaTransformer::new();
+                        let mut ssa_trans = analysis::passes::ssa::SsaTransformer::new();
                         ssa_trans.lakukan_transformasi_ssa(&mut cfg, &dom_tree);
                         ssa_trans.optimasi_propagasi_konstanta(&mut cfg);
-                        let mut expr_opt = analysis::expression_optimizer::ExpressionOptimizer::new();
-                        expr_opt.jalankan_optimasi(&mut cfg);
+                        let mut expr_opt = analysis::passes::opt_expr::ExpressionOptimizer::new();
+                        expr_opt.jalankan_optimasi(&mut cfg);  
                         ssa_trans.optimasi_dead_code(&mut cfg); 
-                        let calling_conv = analysis::calling_convention::CallingConventionAnalyzer::new(arsitektur.as_ref());
+                        let calling_conv = analysis::recovery::abi::CallingConventionAnalyzer::new(arsitektur.as_ref());
                         let params = calling_conv.deteksi_entry_params(&cfg);
-                        let mut structurer = analysis::structuring::ControlFlowStructurer::new();
+                        let mut structurer = analysis::recovery::ast::ControlFlowStructurer::new();
                         let ast = structurer.bangun_tree_struktur(&mut cfg);
                         let nama_fungsi = if let Some(sym) = vmem.simbol_global.get(func_addr) {
                             sym.clone()
@@ -105,29 +100,27 @@ pub extern "C" fn muat_file_biner(
                         } else {
                             format!("sub_{:x}", func_addr)
                         };
-                        let func_code = emitter.hasilkan_fungsi_tunggal(
-                            &nama_fungsi, 
-                            &ast, 
-                            &type_sys, 
-                            &stack_frame, 
-                            &vmem.simbol_global, 
-                            &params, 
-                            arsitektur.as_ref()
-                        );
+                        let func_code = emitter.hasilkan_fungsi_tunggal(&nama_fungsi, &ast, &type_sys, &stack_frame, &vmem.simbol_global, &params, arsitektur.as_ref());
                         all_source_code.push_str(&func_code);
                     }
-                    debug!("\n--- Hasil Akhir Dekompilasi ---\n");
                     info!("{}", all_source_code);
                     0
                 },
                 Err(e) => {
-                    let error_msg = format!("Gagal memuat: {}", e);
+                    let code = match e {
+                        LoaderError::NotFound => -2,
+                        LoaderError::InvalidFormat => -3,
+                        LoaderError::ParseError(_) => -4,
+                        LoaderError::IoError(_) => -5,
+                        LoaderError::OutOfBoundsError => -6,
+                    };
+                    let error_msg = format!("Load Fail: {}", e);
                     error!("{}", error_msg);
                     context.last_error = error_msg;
-                    -2
+                    code
                 }
             }
         },
-        Err(_) => -3
+        Err(_) => -1 
     }
 }

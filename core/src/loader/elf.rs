@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::Path;
 use goblin::elf::{Elf, section_header};
-use crate::loader::memory::{VirtualMemory, IzinAkses};
+use crate::loader::vmem::{VirtualMemory, IzinAkses};
+use crate::loader::LoaderError;
+use log::{warn};
 
 pub struct ElfParser {
     pub file_path: String,
@@ -13,18 +15,19 @@ impl ElfParser {
             file_path: path.to_string(),
         }
     }
-    pub fn muat_virtual_memory(&mut self) -> Result<VirtualMemory, String> {
+    pub fn muat_virtual_memory(&mut self) -> Result<VirtualMemory, LoaderError> {
         let path = Path::new(&self.file_path);
-        let buffer = fs::read(path).map_err(|e| e.to_string())?;
-        let elf = Elf::parse(&buffer).map_err(|e| e.to_string())?;
+        let buffer = fs::read(path).map_err(|e| LoaderError::IoError(e.to_string()))?;
+        let elf = Elf::parse(&buffer).map_err(|e| LoaderError::ParseError(e.to_string()))?;
         let arch_str = if elf.is_64 { "x86_64" } else { "x86" };
         let mut vmem = VirtualMemory::baru(elf.entry, arch_str);
         for section in &elf.section_headers {
             if section.sh_flags & (section_header::SHF_ALLOC as u64) != 0 {
                 let start = section.sh_offset as usize;
                 let size = section.sh_size as usize;
-                if start + size <= buffer.len() {
-                    let data = buffer[start..start+size].to_vec();
+                let end_offset = start.checked_add(size).ok_or(LoaderError::OutOfBoundsError)?;
+                if end_offset <= buffer.len() {
+                    let data = buffer[start..end_offset].to_vec();
                     let mut perm_val = 0;
                     if section.sh_flags & (section_header::SHF_WRITE as u64) != 0 { perm_val |= 2; }
                     if section.sh_flags & (section_header::SHF_EXECINSTR as u64) != 0 { perm_val |= 4; }
@@ -35,6 +38,8 @@ impl ElfParser {
                         "unknown".to_string()
                     };
                     vmem.tambah_segment(section.sh_addr, data, IzinAkses::from_u32(perm_val), nama);
+                } else {
+                    warn!("Section di 0x{:x} melebihi buffer file.", section.sh_addr);
                 }
             }
         }

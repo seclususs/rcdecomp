@@ -1,13 +1,3 @@
-pub mod cfg;
-pub mod dataflow;
-pub mod structuring;
-pub mod type_inference;
-pub mod stack_analysis;
-pub mod dominator;
-pub mod ssa;
-pub mod calling_convention;
-pub mod std_lib;
-pub mod recursive_descent;
-pub mod indirect_jump;
-pub mod expression_optimizer;
-pub mod alias_analysis;
+pub mod passes;
+pub mod graph;
+pub mod recovery;

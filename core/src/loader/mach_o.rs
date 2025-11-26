@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::Path;
 use goblin::mach::{Mach, MachO};
-use crate::loader::memory::{VirtualMemory, IzinAkses};
+use crate::loader::vmem::{VirtualMemory, IzinAkses};
+use crate::loader::LoaderError;
+use log::{info, error};
 
 pub struct MachoLoader {
     pub file_path: String,
@@ -13,12 +15,12 @@ impl MachoLoader {
             file_path: path.to_string(),
         }
     }
-    pub fn muat_virtual_memory(&self) -> Result<VirtualMemory, String> {
+    pub fn muat_virtual_memory(&self) -> Result<VirtualMemory, LoaderError> {
         let path = Path::new(&self.file_path);
-        let buffer = fs::read(path).map_err(|e| e.to_string())?;
-        match Mach::parse(&buffer).map_err(|e| e.to_string())? {
+        let buffer = fs::read(path).map_err(|e| LoaderError::IoError(e.to_string()))?;
+        match Mach::parse(&buffer).map_err(|e| LoaderError::ParseError(e.to_string()))? {
             Mach::Binary(macho) => {
-                self.parse_macho_ke_memory(macho, &buffer)
+                self.parse_macho_ke_memory_aman(macho, &buffer)
             },
             Mach::Fat(fat) => {
                 let mut selected_arch = None;
@@ -38,33 +40,42 @@ impl MachoLoader {
                 if let Some(arch) = selected_arch {
                     let start = arch.offset as usize;
                     let size = arch.size as usize;
-                    if start + size > buffer.len() {
-                        return Err("Slice range out of bounds".to_string());
+                    let end = start.checked_add(size).ok_or(LoaderError::OutOfBoundsError)?;
+                    if end > buffer.len() {
+                        error!("FAT slice bounds check failed");
+                        return Err(LoaderError::OutOfBoundsError);
                     }
-                    let slice_bytes = &buffer[start..start+size];
-                    let macho = MachO::parse(slice_bytes, 0).map_err(|e| e.to_string())?;
-                    self.parse_macho_ke_memory(macho, slice_bytes)
+                    let slice_bytes = &buffer[start..end];
+                    let macho = MachO::parse(slice_bytes, 0).map_err(|e| LoaderError::ParseError(e.to_string()))?;
+                    self.parse_macho_ke_memory_aman(macho, slice_bytes)
                 } else {
-                    Err("Tidak ditemukan slice arsitektur yang valid".to_string())
+                    Err(LoaderError::ParseError("Tidak ada arsitektur valid di Fat Binary".into()))
                 }
             }
         }
     }
-    fn parse_macho_ke_memory(&self, macho: MachO, data: &[u8]) -> Result<VirtualMemory, String> {
+    fn parse_macho_ke_memory_aman(&self, macho: MachO, data: &[u8]) -> Result<VirtualMemory, LoaderError> {
         let is_64 = macho.is_64;
         let arch_str = if is_64 { "x86_64" } else { "x86" };
         let mut vmem = VirtualMemory::baru(macho.entry, arch_str);
         for segment in &macho.segments {
-            for (section, _) in &segment.sections().map_err(|e| e.to_string())? {
+            for (section, _) in &segment.sections().map_err(|e| LoaderError::ParseError(e.to_string()))? {
                 let start = section.offset as usize;
                 let size = section.size as usize;
-                if start + size <= data.len() {
-                    let seg_data = data[start..start+size].to_vec();
-                    let mut perm_val = 1;
+                let end = start.checked_add(size).ok_or(LoaderError::OutOfBoundsError)?;
+                if end <= data.len() {
+                    let seg_data = data[start..end].to_vec();
+                    let mut perm_val = 0;
+                    if segment.initprot & 0x1 != 0 { perm_val |= 1; }
                     if segment.initprot & 0x2 != 0 { perm_val |= 2; }
                     if segment.initprot & 0x4 != 0 { perm_val |= 4; }
                     let nama = section.name().unwrap_or("unknown").to_string();
+                    if perm_val == 0 && nama == "__text" {
+                        perm_val = 5; 
+                    }
                     vmem.tambah_segment(section.addr, seg_data, IzinAkses::from_u32(perm_val), nama);
+                } else {
+                    info!("Section {} diabaikan (OOB)", section.name().unwrap_or("?"));
                 }
             }
         }

@@ -1,9 +1,56 @@
-#[derive(Debug, Clone, PartialEq)]
+use std::hash::{Hash, Hasher};
+use std::cmp::Ordering;
+use std::fmt;
+
+#[derive(Debug, Clone, Copy)]
+pub struct OrderedFloat(pub f64);
+
+impl PartialEq for OrderedFloat {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for OrderedFloat {}
+
+impl Hash for OrderedFloat {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.to_bits().hash(state);
+    }
+}
+
+impl PartialOrd for OrderedFloat {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for OrderedFloat {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.0.is_nan() && other.0.is_nan() {
+            Ordering::Equal
+        } else if self.0.is_nan() {
+            Ordering::Greater
+        } else if other.0.is_nan() {
+            Ordering::Less
+        } else {
+            self.0.partial_cmp(&other.0).unwrap_or(Ordering::Equal)
+        }
+    }
+}
+
+impl fmt::Display for OrderedFloat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TipeOperand {
     Register(String),
     SsaVariable(String, usize), 
     Immediate(i64),
-    FloatImmediate(f64),
+    FloatImmediate(OrderedFloat),
     Memory(u64),
     MemoryRef { base: String, offset: i64 },
     Expression {
@@ -11,10 +58,15 @@ pub enum TipeOperand {
         operand_kiri: Box<TipeOperand>,
         operand_kanan: Box<TipeOperand>,
     },
+    Conditional {
+        condition: Box<TipeOperand>,
+        true_val: Box<TipeOperand>,
+        false_val: Box<TipeOperand>,
+    },
     None,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum OperasiIr {
     Mov, Lea, 
     Add, Sub, Imul, Div,
@@ -30,7 +82,7 @@ pub enum OperasiIr {
     Nop, Phi, Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TipeDataIr {
     Unknown,
     I8, I16, I32, I64,

@@ -1,5 +1,5 @@
 use crate::disasm::instruction::{InstructionNormalized, JenisOperandDisasm};
-use crate::loader::memory::{VirtualMemory, IzinAkses};
+use crate::loader::vmem::{VirtualMemory, IzinAkses};
 use log::{debug, info};
 
 pub struct JumpTableAnalyzer;

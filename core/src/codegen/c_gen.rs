@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use crate::analysis::structuring::NodeAst;
-use crate::analysis::type_inference::{TypeSystem, TipePrimitif};
-use crate::analysis::stack_analysis::StackFrame;
+use crate::analysis::recovery::ast::NodeAst;
+use crate::analysis::recovery::types::{TypeSystem, TipePrimitif};
+use crate::analysis::recovery::stack::StackFrame;
 use crate::ir::types::{StatementIr, OperasiIr, TipeOperand};
 use crate::arch::Architecture;
 
@@ -273,9 +273,15 @@ impl CEmitter {
             OperasiIr::Phi => {
                 let target = fmt(&stmt.operand_satu);
                 format!("{}// PHI node: {} = ...", prefix, target)
-            }
+            },
             OperasiIr::Cmp | OperasiIr::Test | OperasiIr::FCmp => {
-                String::new() 
+                let op1 = fmt(&stmt.operand_satu);
+                let op2 = fmt(&stmt.operand_dua);
+                let operator = match stmt.operation_code {
+                    OperasiIr::Test => "&",
+                    _ => "-",
+                };
+                format!("{}/* FLAGS Check */ (void)({} {} {});", prefix, op1, operator, op2)
             },
             _ => format!("{}// Unhandled Op: {:?}", prefix, stmt.operation_code)
         }
@@ -321,6 +327,17 @@ impl CEmitter {
                 let op_str = self.get_operator_str(operasi);
                 let expr_str = format!("{} {} {}", left, op_str, right);
                 if my_prec < parent_prec {
+                    format!("({})", expr_str)
+                } else {
+                    expr_str
+                }
+            },
+            TipeOperand::Conditional { condition, true_val, false_val } => {
+                let cond_str = self.format_operand_safe(condition, types, stack_frame, arch, addr, Precedence::Ternary);
+                let true_str = self.format_operand_safe(true_val, types, stack_frame, arch, addr, Precedence::Ternary);
+                let false_str = self.format_operand_safe(false_val, types, stack_frame, arch, addr, Precedence::Ternary);
+                let expr_str = format!("{} ? {} : {}", cond_str, true_str, false_str);
+                if Precedence::Ternary < parent_prec {
                     format!("({})", expr_str)
                 } else {
                     expr_str
@@ -385,6 +402,7 @@ impl CEmitter {
             OperasiIr::Jge => ">=",
             OperasiIr::Jl => "<",
             OperasiIr::Jle => "<=",
+            OperasiIr::Cmp | OperasiIr::FCmp => "==", 
             _ => "?",
         }
     }

@@ -5,10 +5,10 @@ use std::collections::hash_map::DefaultHasher;
 use log::{info, debug};
 use serde::{Deserialize, Serialize};
 
-use crate::analysis::type_inference::{TypeSystem, SignatureFungsi, TipePrimitif};
+use crate::analysis::recovery::types::{TypeSystem, SignatureFungsi, TipePrimitif};
 use crate::disasm::engine::DisasmEngine;
 use crate::disasm::instruction::JenisOperandDisasm;
-use crate::loader::memory::VirtualMemory;
+use crate::loader::vmem::VirtualMemory;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExternalFunctionEntry {
@@ -82,7 +82,7 @@ impl StdLibManager {
     pub fn identifikasi_fungsi_statis(
         &self, 
         vmem: &mut VirtualMemory, 
-        detected_functions: &HashMap<u64, crate::analysis::recursive_descent::FunctionContext>,
+        detected_functions: &HashMap<u64, crate::analysis::recovery::explorer::FunctionContext>,
         type_sys: &mut TypeSystem,
         arch: &str
     ) {

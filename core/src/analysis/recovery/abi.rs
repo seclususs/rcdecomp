@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use crate::analysis::cfg::ControlFlowGraph;
+use crate::analysis::graph::cfg::ControlFlowGraph;
 use crate::ir::types::{StatementIr, OperasiIr, TipeOperand};
 use crate::arch::Architecture;
 

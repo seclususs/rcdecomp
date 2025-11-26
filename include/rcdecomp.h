@@ -1,7 +1,7 @@
-/* RCDecomp Header */
+/* Shared Library Header: rcdecomp_core - Auto Generated */
 
-#ifndef RCDECOMP_H
-#define RCDECOMP_H
+#ifndef RCDECOMP_CORE_H
+#define RCDECOMP_CORE_H
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -16,4 +16,4 @@ void hapus_konteks_decompiler(struct ContextDecompiler *ctx_ptr);
 
 int muat_file_biner(struct ContextDecompiler *ctx_ptr, const char *path_ptr);
 
-#endif  /* RCDECOMP_H */
+#endif  /* RCDECOMP_CORE_H */

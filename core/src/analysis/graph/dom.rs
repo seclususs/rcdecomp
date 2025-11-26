@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use crate::analysis::cfg::ControlFlowGraph;
+use crate::analysis::graph::cfg::ControlFlowGraph;
 
 pub struct DominatorTree {
     pub peta_idom: HashMap<u64, u64>,

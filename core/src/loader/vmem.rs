@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum IzinAkses {
@@ -61,19 +62,32 @@ impl VirtualMemory {
         });
         self.segments.sort_by(|a, b| a.start_addr.cmp(&b.start_addr));
     }
-    pub fn baca_byte(&self, addr: u64) -> Option<u8> {
-        for seg in &self.segments {
-            if addr >= seg.start_addr && addr < seg.end_addr {
-                let offset = (addr - seg.start_addr) as usize;
-                return Some(seg.data[offset]);
+    fn temukan_segment_target(&self, addr: u64) -> Option<&SegmentMemori> {
+        let hasil_pencarian = self.segments.binary_search_by(|seg| {
+            if addr >= seg.end_addr {
+                Ordering::Less
+            } else if addr < seg.start_addr {
+                Ordering::Greater
+            } else {
+                Ordering::Equal
             }
+        });
+        match hasil_pencarian {
+            Ok(index) => Some(&self.segments[index]),
+            Err(_) => None,
+        }
+    }
+    pub fn baca_byte(&self, addr: u64) -> Option<u8> {
+        if let Some(seg) = self.temukan_segment_target(addr) {
+            let offset = (addr - seg.start_addr) as usize;
+            return seg.data.get(offset).cloned();
         }
         None
     }
     pub fn baca_array(&self, addr: u64, len: usize) -> Option<Vec<u8>> {
-        for seg in &self.segments {
-            if addr >= seg.start_addr && (addr + len as u64) <= seg.end_addr {
-                let offset = (addr - seg.start_addr) as usize;
+        if let Some(seg) = self.temukan_segment_target(addr) {
+            let offset = (addr - seg.start_addr) as usize;
+            if offset + len <= seg.data.len() {
                 return Some(seg.data[offset..offset + len].to_vec());
             }
         }
