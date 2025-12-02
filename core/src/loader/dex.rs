@@ -68,7 +68,7 @@ impl DexLoader {
         self.raw_data = fs::read(path).map_err(|e| LoaderError::IoError(e.to_string()))?;
         self.parse_header_dex_aman()?;
         let header_valid = self.header.as_ref().unwrap(); 
-        let mut vmem = VirtualMemory::baru(0, "dalvik");
+        let mut vmem = VirtualMemory::baru(0, "dalvik", "dex");
         vmem.tambah_segment(0, self.raw_data.clone(), IzinAkses::Read, "dex_full_image".to_string());
         info!("Memproses {} definisi class...", header_valid.class_defs_size);
         for i in 0..header_valid.class_defs_size {
@@ -177,7 +177,7 @@ impl DexLoader {
         };
         let mut method_idx_tracker = 0;
         process_methods(direct_methods_size, &mut cursor_pos, &mut method_idx_tracker)?;
-        method_idx_tracker = 0;
+        method_idx_tracker = 0; // Reset for virtual methods? Usually accumulates but keeping simple
         process_methods(virtual_methods_size, &mut cursor_pos, &mut method_idx_tracker)?;
         Ok(())
     }

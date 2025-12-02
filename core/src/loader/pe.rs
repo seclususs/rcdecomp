@@ -24,7 +24,7 @@ impl PeLoader {
         let image_base = pe.image_base as u64;
         let entry_rva = pe.entry as u64;
         let absolute_entry = image_base.checked_add(entry_rva).ok_or(LoaderError::OutOfBoundsError)?;
-        let mut vmem = VirtualMemory::baru(absolute_entry, arch_str);
+        let mut vmem = VirtualMemory::baru(absolute_entry, arch_str, "pe");
         for section in &pe.sections {
             let start = section.pointer_to_raw_data as usize;
             let size = section.size_of_raw_data as usize;

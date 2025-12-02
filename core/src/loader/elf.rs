@@ -20,7 +20,7 @@ impl ElfParser {
         let buffer = fs::read(path).map_err(|e| LoaderError::IoError(e.to_string()))?;
         let elf = Elf::parse(&buffer).map_err(|e| LoaderError::ParseError(e.to_string()))?;
         let arch_str = if elf.is_64 { "x86_64" } else { "x86" };
-        let mut vmem = VirtualMemory::baru(elf.entry, arch_str);
+        let mut vmem = VirtualMemory::baru(elf.entry, arch_str, "elf");
         for section in &elf.section_headers {
             if section.sh_flags & (section_header::SHF_ALLOC as u64) != 0 {
                 let start = section.sh_offset as usize;

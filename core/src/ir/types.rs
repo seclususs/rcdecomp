@@ -53,6 +53,13 @@ pub enum TipeOperand {
     FloatImmediate(OrderedFloat),
     Memory(u64),
     MemoryRef { base: String, offset: i64 },
+    MemoryComplex { 
+        base: Option<String>, 
+        index: Option<String>, 
+        scale: i32, 
+        disp: i64,
+        segment: Option<String> 
+    },
     Expression {
         operasi: OperasiIr,
         operand_kiri: Box<TipeOperand>,
@@ -63,31 +70,48 @@ pub enum TipeOperand {
         true_val: Box<TipeOperand>,
         false_val: Box<TipeOperand>,
     },
+    VectorLane {
+        operand: Box<TipeOperand>,
+        lane_index: usize,
+    },
     None,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum OperasiIr {
-    Mov, Lea, 
-    Add, Sub, Imul, Div,
-    And, Or, Xor, Shl, Shr,
+    Mov, Lea, Cmov,
+    Add, Sub, Imul, Mul, Div, Idiv,
+    Adc, Sbb,
+    MulHi,
+    Neg, Inc, Dec,
+    And, Or, Xor, Not,
+    Shl, Shr, Sar, Rol, Ror,
+    Bsr, Bsf, Lzcnt, Tzcnt, Popcnt,
     Jmp, Je, Jne, Jg, Jge, Jl, Jle,
-    Cmp, Test, Call, Ret,
+    Cmp, Test, Call, Ret, Syscall,
     FAdd, FSub, FMul, FDiv,
-    FSqrt, FCmp,
+    FSqrt, FCmp, FMin, FMax,
+    FConv,
     VecAdd, VecSub, VecMul, VecDiv,
     VecAnd, VecOr, VecXor,
-    VecMov, 
-    IntToFloat, FloatToInt,
-    Nop, Phi, Unknown,
+    VecMov, VecShuffle, VecBlend,
+    VecCmp, VecMin, VecMax,
+    AtomicLoad, AtomicStore, AtomicXchg, 
+    AtomicAdd, AtomicSub, AtomicAnd, AtomicOr, AtomicXor,
+    AtomicCas,
+    Fence,
+    Nop, Phi, Unknown, Intrinsic(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TipeDataIr {
     Unknown,
-    I8, I16, I32, I64,
-    F32, F64,
-    V128, V256,
+    I8, I16, I32, I64, I128,
+    F32, F64, F80,
+    V128, V256, V512,
+    V128F32, V128I32, V128I8,
+    V256F32, V256F64,
+    Ptr,
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +122,7 @@ pub struct StatementIr {
     pub operand_dua: TipeOperand,
     pub operand_tambahan: Vec<TipeOperand>,
     pub tipe_hasil: TipeDataIr,
+    pub flags_affected: u8, 
 }
 
 impl StatementIr {
@@ -109,6 +134,7 @@ impl StatementIr {
             operand_dua: op2,
             operand_tambahan: Vec::new(),
             tipe_hasil: TipeDataIr::Unknown,
+            flags_affected: 0,
         }
     }
     pub fn with_type(mut self, t: TipeDataIr) -> Self {

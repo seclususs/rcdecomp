@@ -5,3 +5,4 @@ pub mod indirect;
 pub mod stack;
 pub mod std_lib;
 pub mod types;
+pub mod vtable;

@@ -147,12 +147,13 @@ impl CEmitter {
                     code.push_str(&self.emit_node_ast(n, types, stack_frame, symbol_map, arch));
                 }
             },
-            NodeAst::IfElse { condition, true_branch, false_branch } => {
-                code.push_str(&format!("{}if ({}) {{\n", indent, condition));
+            NodeAst::IfElse { kondisi, branch_true, branch_false } => {
+                code.push_str(&format!("{}if ({}) {{\n", indent, kondisi));
                 self.indent_level += 1;
-                code.push_str(&self.emit_node_ast(true_branch, types, stack_frame, symbol_map, arch));
+                code.push_str(&self.emit_node_ast(branch_true, types, stack_frame, symbol_map, arch));
                 self.indent_level -= 1;
-                if let Some(false_node) = false_branch {
+                
+                if let Some(false_node) = branch_false {
                     code.push_str(&format!("{}}} else {{\n", indent));
                     self.indent_level += 1;
                     code.push_str(&self.emit_node_ast(false_node, types, stack_frame, symbol_map, arch));
@@ -160,15 +161,15 @@ impl CEmitter {
                 }
                 code.push_str(&format!("{}}}\n", indent));
             },
-            NodeAst::TernaryOp { target_var, condition, true_val, false_val } => {
+            NodeAst::TernaryOp { target_var, kondisi, nilai_true, nilai_false } => {
                 code.push_str(&format!("{}{} = ({}) ? {} : {};\n", 
-                    indent, target_var, condition, true_val, false_val));
+                    indent, target_var, kondisi, nilai_true, nilai_false));
             },
-            NodeAst::Switch { variable, cases, default } => {
-                code.push_str(&format!("{}switch ({}) {{\n", indent, variable));
+            NodeAst::Switch { variabel, kasus, default } => {
+                code.push_str(&format!("{}switch ({}) {{\n", indent, variabel));
                 self.indent_level += 1;
                 let case_indent = "    ".repeat(self.indent_level);
-                for (vals, body) in cases {
+                for (vals, body) in kasus {
                     for val in vals {
                         code.push_str(&format!("{}case 0x{:x}:\n", case_indent, val));
                     }
@@ -186,20 +187,32 @@ impl CEmitter {
                 self.indent_level -= 1;
                 code.push_str(&format!("{}}}\n", indent));
             },
-            NodeAst::WhileLoop { condition, body, is_do_while } => {
+            NodeAst::WhileLoop { kondisi, body, is_do_while } => {
                 if *is_do_while {
                     code.push_str(&format!("{}do {{\n", indent));
                     self.indent_level += 1;
                     code.push_str(&self.emit_node_ast(body, types, stack_frame, symbol_map, arch));
                     self.indent_level -= 1;
-                    code.push_str(&format!("{}}} while ({});\n", indent, condition));
+                    code.push_str(&format!("{}}} while ({});\n", indent, kondisi));
                 } else {
-                    code.push_str(&format!("{}while ({}) {{\n", indent, condition));
+                    code.push_str(&format!("{}while ({}) {{\n", indent, kondisi));
                     self.indent_level += 1;
                     code.push_str(&self.emit_node_ast(body, types, stack_frame, symbol_map, arch));
                     self.indent_level -= 1;
                     code.push_str(&format!("{}}}\n", indent));
                 }
+            },
+            NodeAst::TryCatch { block_try, handler_catch, tipe_exception } => {
+                code.push_str(&format!("{}try {{\n", indent));
+                self.indent_level += 1;
+                code.push_str(&self.emit_node_ast(block_try, types, stack_frame, symbol_map, arch));
+                self.indent_level -= 1;
+                
+                code.push_str(&format!("{}}} catch ({}) {{\n", indent, tipe_exception));
+                self.indent_level += 1;
+                code.push_str(&self.emit_node_ast(handler_catch, types, stack_frame, symbol_map, arch));
+                self.indent_level -= 1;
+                code.push_str(&format!("{}}}\n", indent));
             },
             NodeAst::UnstructuredGoto(target) => {
                 code.push_str(&format!("{}goto addr_0x{:x};\n", indent, target));
@@ -343,6 +356,38 @@ impl CEmitter {
                     expr_str
                 }
             },
+            TipeOperand::MemoryComplex { base, index, scale, disp, segment } => {
+                let mut parts = Vec::new();
+                if let Some(b) = base { 
+                    parts.push(self.bersihkan_nama_variabel(b)); 
+                }
+                if let Some(i) = index {
+                    let idx = self.bersihkan_nama_variabel(i);
+                    if *scale != 1 {
+                        parts.push(format!("{} * {}", idx, scale));
+                    } else {
+                        parts.push(idx);
+                    }
+                }
+                if *disp != 0 {
+                    parts.push(format!("0x{:x}", disp));
+                }
+                let expr = if parts.is_empty() {
+                    "0".to_string()
+                } else {
+                    parts.join(" + ")
+                };
+                let seg_prefix = if let Some(s) = segment {
+                    format!("/* {}: */ ", s)
+                } else {
+                    String::new()
+                };
+                format!("{}*(long*)({})", seg_prefix, expr)
+            },
+            TipeOperand::VectorLane { operand, lane_index } => {
+                let base = self.format_operand_safe(operand, types, stack_frame, arch, addr, Precedence::Postfix);
+                format!("{}[{}]", base, lane_index)
+            },
             TipeOperand::None => "/*err*/".to_string(),
         }
     }
@@ -368,6 +413,17 @@ impl CEmitter {
                     base_clean
                 }
             },
+            TipeOperand::MemoryComplex { base, index, scale, disp, .. } => {
+                 let mut parts = Vec::new();
+                if let Some(b) = base { parts.push(self.bersihkan_nama_variabel(b)); }
+                if let Some(i) = index {
+                    let idx = self.bersihkan_nama_variabel(i);
+                    if *scale != 1 { parts.push(format!("{} * {}", idx, scale)); }
+                    else { parts.push(idx); }
+                }
+                if *disp != 0 { parts.push(format!("0x{:x}", disp)); }
+                if parts.is_empty() { "0".to_string() } else { parts.join(" + ") }
+            }
             _ => self.format_operand_safe(op, types, stack_frame, arch, addr, Precedence::Comma)
         }
     }

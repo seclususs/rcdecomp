@@ -1,5 +1,5 @@
 use crate::disasm::instruction::InstructionNormalized;
-use crate::ir::types::{StatementIr, TipeOperand, OperasiIr};
+use crate::ir::types::{StatementIr, TipeOperand, OperasiIr, TipeDataIr};
 use super::IrLifter;
 use log::debug;
 
@@ -9,53 +9,81 @@ pub fn proses_system_instruction(
     mnemonic: &str, 
     ops: &mut Vec<StatementIr>
 ) {
-    debug!("Lifting System/Privileged: {} @ 0x{:x}", mnemonic, instr.address);
-    match mnemonic {
+    let clean_mnemonic = mnemonic.replace("lock ", ""); 
+    let is_lock = mnemonic.contains("lock");
+    match clean_mnemonic.as_str() {
         "syscall" | "sysenter" | "svc" | "sc" => {
-            let target = format!("__kernel_{}", mnemonic);
-            let mut call = StatementIr::new(instr.address, OperasiIr::Call, TipeOperand::Register(target), TipeOperand::None);
+            let target = format!("__kernel_{}", clean_mnemonic);
+            let mut call = StatementIr::new(instr.address, OperasiIr::Syscall, TipeOperand::Register(target), TipeOperand::None);
             call.operand_tambahan = vec![
                 TipeOperand::Register("rax".to_string()),
                 TipeOperand::Register("rdi".to_string()),
                 TipeOperand::Register("rsi".to_string()),
                 TipeOperand::Register("rdx".to_string()),
+                TipeOperand::Register("r10".to_string()),
+                TipeOperand::Register("r8".to_string()),
+                TipeOperand::Register("r9".to_string()),
             ];
             ops.push(call);
-            ops.push(StatementIr::new(instr.address, OperasiIr::Unknown, TipeOperand::Register("rax".to_string()), TipeOperand::None));
+            ops.push(StatementIr::new(instr.address, OperasiIr::Mov, TipeOperand::Register("rax".to_string()), TipeOperand::Register("syscall_result".to_string())));
         },
-        "cpuid" => {
-            let mut call = StatementIr::new(instr.address, OperasiIr::Call, TipeOperand::Register("__asm_cpuid".to_string()), TipeOperand::None);
-            call.operand_tambahan = vec![TipeOperand::Register("eax".to_string()), TipeOperand::Register("ecx".to_string())];
-            ops.push(call);
-            for r in ["eax", "ebx", "ecx", "edx"] {
-                ops.push(StatementIr::new(instr.address, OperasiIr::Unknown, TipeOperand::Register(r.to_string()), TipeOperand::None));
-            }
-        },
-        "rdtsc" | "rdtscp" => {
-            ops.push(StatementIr::new(instr.address, OperasiIr::Call, TipeOperand::Register("__asm_rdtsc".to_string()), TipeOperand::None));
-            ops.push(StatementIr::new(instr.address, OperasiIr::Unknown, TipeOperand::Register("eax".to_string()), TipeOperand::None));
-            ops.push(StatementIr::new(instr.address, OperasiIr::Unknown, TipeOperand::Register("edx".to_string()), TipeOperand::None));
-        },
-        "andn" => {
-            let dest = lifter.ambil_operand(instr, 0);
-            let src1 = lifter.ambil_operand(instr, 1);
-            let src2 = lifter.ambil_operand(instr, 2);
-            let not_s1 = Box::new(TipeOperand::Expression { operasi: OperasiIr::Xor, operand_kiri: Box::new(src1), operand_kanan: Box::new(TipeOperand::Immediate(-1)) });
-            ops.push(StatementIr::new(instr.address, OperasiIr::Mov, dest, TipeOperand::Expression { operasi: OperasiIr::And, operand_kiri: not_s1, operand_kanan: Box::new(src2) }));
-        },
-        "popcnt" | "lzcnt" | "tzcnt" => {
-            let dest = lifter.ambil_operand(instr, 0);
-            let src = lifter.ambil_operand(instr, 1);
-            let intr = format!("__builtin_{}", mnemonic);
-            let mut call = StatementIr::new(instr.address, OperasiIr::Call, TipeOperand::Register(intr), TipeOperand::None);
-            call.operand_tambahan.push(src);
-            ops.push(call);
-            ops.push(StatementIr::new(instr.address, OperasiIr::Unknown, dest, TipeOperand::None));
-        },
-        _ => {
+        "xchg" => {
             let op1 = lifter.ambil_operand(instr, 0);
             let op2 = lifter.ambil_operand(instr, 1);
-            ops.push(StatementIr::new(instr.address, OperasiIr::Unknown, op1, op2));
+            let is_mem = matches!(op1, TipeOperand::Memory(_) | TipeOperand::MemoryRef{..}) || 
+                         matches!(op2, TipeOperand::Memory(_) | TipeOperand::MemoryRef{..});
+            let op_code = if is_mem || is_lock { OperasiIr::AtomicXchg } else { OperasiIr::Mov };
+            if op_code == OperasiIr::AtomicXchg {
+                ops.push(StatementIr::new(instr.address, OperasiIr::AtomicXchg, op1, op2));
+            } else {
+                let temp = TipeOperand::Register("temp_swap".to_string());
+                ops.push(StatementIr::new(instr.address, OperasiIr::Mov, temp.clone(), op1.clone()));
+                ops.push(StatementIr::new(instr.address, OperasiIr::Mov, op1, op2.clone()));
+                ops.push(StatementIr::new(instr.address, OperasiIr::Mov, op2, temp));
+            }
+        },
+        "cmpxchg" => {
+            let dest = lifter.ambil_operand(instr, 0);
+            let src = lifter.ambil_operand(instr, 1);
+            let accumulator = TipeOperand::Register("rax".to_string());
+            
+            let mut cas_op = StatementIr::new(
+                instr.address, 
+                OperasiIr::AtomicCas, 
+                dest, 
+                src
+            );
+            cas_op.operand_tambahan.push(accumulator);
+            ops.push(cas_op);
+            ops.push(StatementIr::new(instr.address, OperasiIr::Unknown, TipeOperand::Register("eflags".to_string()), TipeOperand::None));
+        },
+        "xadd" => {
+             let dest = lifter.ambil_operand(instr, 0);
+             let src = lifter.ambil_operand(instr, 1);
+             ops.push(StatementIr::new(instr.address, OperasiIr::AtomicAdd, dest, src)); 
+        },
+        "lfence" | "sfence" | "mfence" => {
+             ops.push(StatementIr::new(instr.address, OperasiIr::Fence, TipeOperand::None, TipeOperand::None));
+        },
+        "cpuid" => {
+            let mut call = StatementIr::new(instr.address, OperasiIr::Intrinsic("__cpuid".to_string()), TipeOperand::None, TipeOperand::None);
+            call.operand_tambahan = vec![TipeOperand::Register("eax".to_string()), TipeOperand::Register("ecx".to_string())];
+            ops.push(call);
+        },
+        "popcnt" | "lzcnt" | "tzcnt" => {
+             let dest = lifter.ambil_operand(instr, 0);
+             let src = lifter.ambil_operand(instr, 1);
+             let op = match clean_mnemonic.as_str() {
+                 "popcnt" => OperasiIr::Popcnt,
+                 "lzcnt" => OperasiIr::Lzcnt,
+                 "tzcnt" => OperasiIr::Tzcnt,
+                 _ => OperasiIr::Unknown
+             };
+             ops.push(StatementIr::new(instr.address, op, dest, src).with_type(TipeDataIr::I64));
+        }
+        _ => {
+            debug!("System instruction generic: {}", clean_mnemonic);
+            ops.push(StatementIr::new(instr.address, OperasiIr::Unknown, TipeOperand::None, TipeOperand::None));
         }
     }
 }

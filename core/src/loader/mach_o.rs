@@ -57,7 +57,7 @@ impl MachoLoader {
     fn parse_macho_ke_memory_aman(&self, macho: MachO, data: &[u8]) -> Result<VirtualMemory, LoaderError> {
         let is_64 = macho.is_64;
         let arch_str = if is_64 { "x86_64" } else { "x86" };
-        let mut vmem = VirtualMemory::baru(macho.entry, arch_str);
+        let mut vmem = VirtualMemory::baru(macho.entry, arch_str, "macho");
         for segment in &macho.segments {
             for (section, _) in &segment.sections().map_err(|e| LoaderError::ParseError(e.to_string()))? {
                 let start = section.offset as usize;

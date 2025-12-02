@@ -2,6 +2,11 @@ use crate::disasm::instruction::InstructionNormalized;
 use crate::ir::types::{StatementIr, TipeOperand, OperasiIr, TipeDataIr};
 use super::IrLifter;
 
+const FLAG_ZF: &str = "eflags_zf";
+const FLAG_CF: &str = "eflags_cf";
+const FLAG_SF: &str = "eflags_sf";
+const FLAG_OF: &str = "eflags_of";
+
 pub fn proses_ret(lifter: &IrLifter, instr: &InstructionNormalized, ops: &mut Vec<StatementIr>) {
     ops.push(StatementIr::new(
         instr.address,
@@ -43,7 +48,7 @@ pub fn proses_conditional_branch(
         let reg = lifter.ambil_operand(instr, 0);
         let jump_target = lifter.ambil_operand(instr, 1);
         let cond = TipeOperand::Expression {
-            operasi: OperasiIr::Cmp,
+            operasi: OperasiIr::Je,
             operand_kiri: Box::new(reg),
             operand_kanan: Box::new(TipeOperand::Immediate(0)),
         };
@@ -53,7 +58,7 @@ pub fn proses_conditional_branch(
         let reg = lifter.ambil_operand(instr, 0);
         let jump_target = lifter.ambil_operand(instr, 1);
         let cond = TipeOperand::Expression {
-            operasi: OperasiIr::Cmp,
+            operasi: OperasiIr::Jne, 
             operand_kiri: Box::new(reg),
             operand_kanan: Box::new(TipeOperand::Immediate(0)),
         };
@@ -62,7 +67,7 @@ pub fn proses_conditional_branch(
     } else {
         ""
     };
-    let condition_expr = dapatkan_kondisi_lazy(suffix);
+    let condition_expr = generate_kondisi_explicit(suffix);
     let op_ir = match suffix {
         "e" | "z" | "eq" => OperasiIr::Je,
         "ne" | "nz" => OperasiIr::Jne,
@@ -80,24 +85,82 @@ pub fn proses_conditional_branch(
     ));
 }
 
-pub fn dapatkan_kondisi_lazy(mnemonic_suffix: &str) -> TipeOperand {
+pub fn generate_kondisi_explicit(mnemonic_suffix: &str) -> TipeOperand {
     let suffix = if mnemonic_suffix.starts_with("b.") {
         mnemonic_suffix.strip_prefix("b.").unwrap_or("")
     } else {
         mnemonic_suffix
     };
-    let helper_name = match suffix {
-        "e" | "z" | "eq" => "check_zf",
-        "ne" | "nz"      => "check_nz",
-        "s" | "mi"       => "check_sf",
-        "ns" | "pl"      => "check_ns",
-        "o" | "vs"       => "check_of",
-        "b" | "c" | "nae" | "lo" => "check_cf",
-        "l" | "lt"       => "check_lt",
-        "ge" | "nl"      => "check_ge",
-        "le"             => "check_le",
-        "gt"             => "check_gt",
-        _ => "check_unknown"
-    };
-    TipeOperand::Register(format!("lazy_{}", helper_name))
+    let zf = TipeOperand::Register(FLAG_ZF.to_string());
+    let cf = TipeOperand::Register(FLAG_CF.to_string());
+    let sf = TipeOperand::Register(FLAG_SF.to_string());
+    let of = TipeOperand::Register(FLAG_OF.to_string());
+    let one = TipeOperand::Immediate(1);
+    let zero = TipeOperand::Immediate(0);
+    match suffix {
+        "e" | "z" | "eq" => {
+            make_comparison(OperasiIr::Je, zf, one)
+        },
+        "ne" | "nz" => {
+            make_comparison(OperasiIr::Je, zf, zero)
+        },
+        "s" | "mi" => {
+            make_comparison(OperasiIr::Je, sf, one)
+        },
+        "ns" | "pl" => {
+            make_comparison(OperasiIr::Je, sf, zero)
+        },
+        "b" | "c" | "nae" | "lo" => {
+            make_comparison(OperasiIr::Je, cf, one)
+        },
+        "nb" | "ae" | "nc" => {
+            make_comparison(OperasiIr::Je, cf, zero)
+        },
+        "l" | "lt" => {
+            make_comparison(OperasiIr::Jne, sf, of)
+        },
+        "ge" | "nl" => {
+            make_comparison(OperasiIr::Je, sf, of)
+        },
+        "le" => {
+            let zf_set = make_comparison(OperasiIr::Je, zf, one.clone());
+            let sf_neq_of = make_comparison(OperasiIr::Jne, sf, of);
+            make_binary(OperasiIr::Or, zf_set, sf_neq_of)
+        },
+        "g" | "gt" => {
+            let zf_clear = make_comparison(OperasiIr::Je, zf, zero);
+            let sf_eq_of = make_comparison(OperasiIr::Je, sf, of);
+            make_binary(OperasiIr::And, zf_clear, sf_eq_of)
+        },
+        "a" | "ja" => {
+            let cf_clear = make_comparison(OperasiIr::Je, cf, zero.clone());
+            let zf_clear = make_comparison(OperasiIr::Je, zf, zero);
+            make_binary(OperasiIr::And, cf_clear, zf_clear)
+        },
+        "be" | "jna" => {
+             let cf_set = make_comparison(OperasiIr::Je, cf, one.clone());
+             let zf_set = make_comparison(OperasiIr::Je, zf, one);
+             make_binary(OperasiIr::Or, cf_set, zf_set)
+        },
+        "o" | "vs" => {
+            make_comparison(OperasiIr::Je, of, one)
+        },
+        _ => TipeOperand::Immediate(1)
+    }
+}
+
+fn make_comparison(op: OperasiIr, left: TipeOperand, right: TipeOperand) -> TipeOperand {
+    TipeOperand::Expression {
+        operasi: op,
+        operand_kiri: Box::new(left),
+        operand_kanan: Box::new(right),
+    }
+}
+
+fn make_binary(op: OperasiIr, left: TipeOperand, right: TipeOperand) -> TipeOperand {
+    TipeOperand::Expression {
+        operasi: op,
+        operand_kiri: Box::new(left),
+        operand_kanan: Box::new(right),
+    }
 }

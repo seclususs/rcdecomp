@@ -8,7 +8,8 @@ pub enum TipePrimitif {
     Integer(u8),       
     Float(u8),         
     Pointer(Box<TipePrimitif>),
-    Struct(String),    
+    Struct(String),
+    Class(String),
     Array(Box<TipePrimitif>, usize), 
     Vector(u16),       
     Union(Vec<TipePrimitif>), 
@@ -20,6 +21,15 @@ pub struct StructLayout {
     pub size: usize,
     pub fields: BTreeMap<i64, TipePrimitif>,
     pub is_recursive: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClassLayout {
+    pub name: String,
+    pub parent_name: Option<String>,
+    pub vtable_address: Option<u64>,
+    pub fields: BTreeMap<i64, TipePrimitif>,
+    pub virtual_methods: Vec<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +69,7 @@ pub struct TypeSystem {
     pub global_signatures: HashMap<u64, SignatureFungsi>,
     pub variable_types: HashMap<String, TipePrimitif>,
     pub struct_definitions: HashMap<String, StructLayout>,
+    pub class_definitions: HashMap<String, ClassLayout>,
     pub constraints: HashSet<ConstraintTipe>,
     pub struct_counter: usize,
     pub unification_cache: HashSet<(TipePrimitif, TipePrimitif)>,
@@ -71,6 +82,7 @@ impl TypeSystem {
             global_signatures: HashMap::new(),
             variable_types: HashMap::new(),
             struct_definitions: HashMap::new(),
+            class_definitions: HashMap::new(),
             constraints: HashSet::new(),
             struct_counter: 0,
             unification_cache: HashSet::new(),
@@ -99,6 +111,7 @@ impl TypeSystem {
             TipePrimitif::Float(8) => "double".to_string(),
             TipePrimitif::Pointer(inner) => format!("{}*", self.konversi_primitif_ke_string(inner)),
             TipePrimitif::Struct(name) => format!("struct {}", name),
+            TipePrimitif::Class(name) => format!("class {}", name),
             _ => "void*".to_string()
          }
     }
@@ -106,6 +119,16 @@ impl TypeSystem {
         let mut output = BTreeMap::new();
         for (name, layout) in &self.struct_definitions {
             let mut fields_str = BTreeMap::new();
+            for (offset, tipe) in &layout.fields {
+                fields_str.insert(*offset, self.konversi_primitif_ke_string(tipe));
+            }
+            output.insert(name.clone(), fields_str);
+        }
+        for (name, layout) in &self.class_definitions {
+            let mut fields_str = BTreeMap::new();
+            if layout.vtable_address.is_some() {
+                 fields_str.insert(0, "void** /* vptr */".to_string());
+            }
             for (offset, tipe) in &layout.fields {
                 fields_str.insert(*offset, self.konversi_primitif_ke_string(tipe));
             }

@@ -39,15 +39,17 @@ pub struct VirtualMemory {
     pub segments: Vec<SegmentMemori>,
     pub entry_point: u64,
     pub arsitektur: String,
+    pub format_biner: String,
     pub simbol_global: BTreeMap<u64, String>,
 }
 
 impl VirtualMemory {
-    pub fn baru(entry: u64, arch: &str) -> Self {
+    pub fn baru(entry: u64, arch: &str, format: &str) -> Self {
         Self {
             segments: Vec::new(),
             entry_point: entry,
             arsitektur: arch.to_string(),
+            format_biner: format.to_string(),
             simbol_global: BTreeMap::new(),
         }
     }

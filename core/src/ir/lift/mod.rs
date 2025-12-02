@@ -1,23 +1,33 @@
 use crate::disasm::instruction::{InstructionNormalized, JenisOperandDisasm};
 use crate::ir::types::{StatementIr, TipeOperand, OperasiIr};
+use std::sync::Arc;
 
 pub mod arithmetic;
 pub mod flow;
 pub mod simd;
 pub mod crypto;
-pub mod system; 
+pub mod system;
+pub mod semantic; 
+pub mod bitwise;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct IrLifter {
     pub pointer_size: i64,
+    pub semantic_engine: Arc<semantic::SemanticEngine>,
 }
 
 impl IrLifter {
     pub fn new() -> Self {
-        Self { pointer_size: 8 }
+        Self { 
+            pointer_size: 8,
+            semantic_engine: Arc::new(semantic::SemanticEngine::new()),
+        }
     }
     pub fn konversi_instruksi_ke_microcode(&self, instr: &InstructionNormalized) -> Vec<StatementIr> {
         let mut micro_ops = Vec::new();
+        if self.semantic_engine.proses_lifting_otomatis(self, instr, &mut micro_ops) {
+            return micro_ops;
+        }
         let mnemonic = instr.mnemonic.to_lowercase();
         let mnem_str = mnemonic.as_str();
         if simd::cek_is_simd_instruction(mnem_str) {
@@ -35,28 +45,22 @@ impl IrLifter {
             "push" => arithmetic::proses_push(self, instr, &mut micro_ops),
             "pop" => arithmetic::proses_pop(self, instr, &mut micro_ops),
             "mov" | "movabs" | "movzx" | "movsx" => arithmetic::proses_data_movement(self, instr, &mut micro_ops),
-            "ldr" => arithmetic::proses_load_operation(self, instr, &mut micro_ops),
-            "str" => arithmetic::proses_store_operation(self, instr, &mut micro_ops),
-            "ldp" => arithmetic::proses_load_pair(self, instr, &mut micro_ops),
-            "stp" => arithmetic::proses_store_pair(self, instr, &mut micro_ops),
             "lea" | "adr" | "adrp" => arithmetic::proses_lea(self, instr, &mut micro_ops),
-            "cmovg" | "cmovl" | "cmove" | "cmovne" | "csel" => {
-                arithmetic::proses_conditional_move(self, instr, mnem_str, &mut micro_ops);
+            "add" | "inc" => arithmetic::proses_arithmetic_explicit(self, instr, OperasiIr::Add, &mut micro_ops),
+            "sub" | "dec" => arithmetic::proses_arithmetic_explicit(self, instr, OperasiIr::Sub, &mut micro_ops),
+            "imul" | "mul" => arithmetic::proses_arithmetic_explicit(self, instr, OperasiIr::Imul, &mut micro_ops),
+            "idiv" | "div" => arithmetic::proses_arithmetic_explicit(self, instr, OperasiIr::Div, &mut micro_ops),
+            "and" | "tst" => if mnem_str == "tst" { 
+                arithmetic::proses_comparison_explicit(self, instr, OperasiIr::And, &mut micro_ops) 
+            } else { 
+                arithmetic::proses_arithmetic_explicit(self, instr, OperasiIr::And, &mut micro_ops) 
             },
-            "add" | "inc" => arithmetic::proses_arithmetic_lazy(self, instr, OperasiIr::Add, &mut micro_ops),
-            "sub" | "dec" => arithmetic::proses_arithmetic_lazy(self, instr, OperasiIr::Sub, &mut micro_ops),
-            "imul" | "mul" => arithmetic::proses_arithmetic_lazy(self, instr, OperasiIr::Imul, &mut micro_ops),
-            "idiv" | "div" => arithmetic::proses_arithmetic_lazy(self, instr, OperasiIr::Div, &mut micro_ops),
-            "and" | "tst" => if mnem_str == "tst" { arithmetic::proses_comparison_lazy(self, instr, OperasiIr::And, &mut micro_ops) } else { arithmetic::proses_arithmetic_lazy(self, instr, OperasiIr::And, &mut micro_ops) },
-            "or" | "orr" => arithmetic::proses_arithmetic_lazy(self, instr, OperasiIr::Or, &mut micro_ops),
-            "xor" | "eor" => arithmetic::proses_arithmetic_lazy(self, instr, OperasiIr::Xor, &mut micro_ops),
-            "not" | "mvn" => arithmetic::proses_not_operation(self, instr, &mut micro_ops),
-            "neg" => arithmetic::proses_neg_operation(self, instr, &mut micro_ops),
-            "shl" | "sal" | "lsl" => arithmetic::proses_arithmetic_lazy(self, instr, OperasiIr::Shl, &mut micro_ops),
-            "shr" | "lsr" | "asr" => arithmetic::proses_arithmetic_lazy(self, instr, OperasiIr::Shr, &mut micro_ops),
-            "cmp" | "cmn" => arithmetic::proses_comparison_lazy(self, instr, if mnem_str == "cmn" { OperasiIr::Add } else { OperasiIr::Sub }, &mut micro_ops),
-            "xadd" | "cmpxchg" | "xchg" | "lock" => arithmetic::proses_atomic_instruction(self, instr, mnem_str, &mut micro_ops),
-            "aesenc" | "aesdec" | "sha1msg1" => crypto::proses_crypto_instruction(self, instr, mnem_str, &mut micro_ops),
+            "or" | "orr" => arithmetic::proses_arithmetic_explicit(self, instr, OperasiIr::Or, &mut micro_ops),
+            "xor" | "eor" => arithmetic::proses_arithmetic_explicit(self, instr, OperasiIr::Xor, &mut micro_ops),
+            "shl" | "sal" | "shr" | "sar" | "rol" | "ror" => {
+                bitwise::proses_shift_rotate(self, instr, mnem_str, &mut micro_ops);
+            },
+            "cmp" | "cmn" => arithmetic::proses_comparison_explicit(self, instr, if mnem_str == "cmn" { OperasiIr::Add } else { OperasiIr::Sub }, &mut micro_ops),
             "syscall" | "cpuid" | "rdtsc" | "andn" | "popcnt" => system::proses_system_instruction(self, instr, mnem_str, &mut micro_ops),
             "nop" => {},
             _ => arithmetic::proses_generic_unknown(self, instr, &mut micro_ops),

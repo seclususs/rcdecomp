@@ -8,25 +8,30 @@ pub enum NodeAst {
     Block(Vec<StatementIr>),
     Sequence(Vec<NodeAst>),
     IfElse {
-        condition: String,
-        true_branch: Box<NodeAst>,
-        false_branch: Option<Box<NodeAst>>,
+        kondisi: String,
+        branch_true: Box<NodeAst>,
+        branch_false: Option<Box<NodeAst>>,
     },
     TernaryOp {
         target_var: String,
-        condition: String,
-        true_val: String,
-        false_val: String,
+        kondisi: String,
+        nilai_true: String,
+        nilai_false: String,
     },
     Switch {
-        variable: String,
-        cases: Vec<(Vec<u64>, NodeAst)>,
+        variabel: String,
+        kasus: Vec<(Vec<u64>, NodeAst)>,
         default: Option<Box<NodeAst>>,
     },
     WhileLoop {
-        condition: String,
+        kondisi: String,
         body: Box<NodeAst>,
         is_do_while: bool,
+    },
+    TryCatch {
+        block_try: Box<NodeAst>,
+        handler_catch: Box<NodeAst>,
+        tipe_exception: String,
     },
     UnstructuredGoto(u64),
     Break,
@@ -35,184 +40,220 @@ pub enum NodeAst {
 }
 
 #[derive(Debug, Clone)]
-struct LoopContext {
-    header_id: u64,
-    latch_id: Option<u64>, 
-    merge_point: Option<u64>,
+struct ContextLoop {
+    id_header: u64,
+    id_latch: Option<u64>, 
+    titik_merge: Option<u64>,
     is_do_while: bool,
 }
 
 pub struct ControlFlowStructurer {
-    visited_nodes: HashSet<u64>,
-    loop_headers: HashMap<u64, Vec<u64>>, 
-    split_counter: usize,
-    loop_stack_context: Vec<LoopContext>,
+    node_terkunjungi: HashSet<u64>,
+    peta_header_loop: HashMap<u64, Vec<u64>>, 
+    counter_splitting: usize,
+    stack_konteks_loop: Vec<ContextLoop>,
 }
 
 impl ControlFlowStructurer {
     pub fn new() -> Self {
         Self {
-            visited_nodes: HashSet::new(),
-            loop_headers: HashMap::new(),
-            split_counter: 0,
-            loop_stack_context: Vec::new(),
+            node_terkunjungi: HashSet::new(),
+            peta_header_loop: HashMap::new(),
+            counter_splitting: 0,
+            stack_konteks_loop: Vec::new(),
         }
     }
     pub fn bangun_tree_struktur(&mut self, cfg: &mut ControlFlowGraph) -> NodeAst {
-        self.normalisasi_irreducible_loops(cfg);
+        self.normalisasi_flow_irreducible(cfg);
         let mut dom_tree = DominatorTree::new();
         dom_tree.hitung_dominators(cfg);
-        self.identifikasi_natural_loops(&dom_tree);
-        self.analisis_region_refined(cfg, &dom_tree, cfg.entry_point, None)
+        self.identifikasi_loop_alami(&dom_tree);
+        self.analisis_region_canggih(cfg, &dom_tree, cfg.entry_point, None)
     }
-    fn analisis_region_refined(
+    fn analisis_region_canggih(
         &mut self, 
         cfg: &ControlFlowGraph, 
         dom: &DominatorTree, 
-        current_id: u64, 
+        id_sekarang: u64, 
         stop_at: Option<u64>
     ) -> NodeAst {
-        if Some(current_id) == stop_at {
+        if Some(id_sekarang) == stop_at {
             return NodeAst::Empty;
         }
-        if let Some(control_stmt) = self.cek_jump_target_loop(current_id) {
-            return control_stmt;
+        if let Some(stmt_kontrol) = self.cek_target_jump_loop(id_sekarang) {
+            return stmt_kontrol;
         }
-        if self.visited_nodes.contains(&current_id) {
-            return NodeAst::UnstructuredGoto(current_id);
+        if self.node_terkunjungi.contains(&id_sekarang) {
+            return NodeAst::UnstructuredGoto(id_sekarang);
         }
-        self.visited_nodes.insert(current_id);
-        let block_data = match cfg.blocks.get(&current_id) {
+        self.node_terkunjungi.insert(id_sekarang);
+        let data_block = match cfg.blocks.get(&id_sekarang) {
             Some(b) => b,
             None => return NodeAst::Empty,
         };
-        if self.loop_headers.contains_key(&current_id) {
-            return self.strukturkan_loop_complex(cfg, dom, current_id, stop_at);
+        if let Some(ast_try_catch) = self.coba_strukturkan_try_catch(cfg, dom, id_sekarang, stop_at) {
+            return ast_try_catch;
         }
-        let node_basic_block = NodeAst::Block(block_data.instruksi_list.clone());
-        let successors = &block_data.successors;
-        let ipd = dom.peta_post_idom.get(&current_id).cloned();
-        let region_merge_point = self.hitung_region_merge_point(dom, ipd, stop_at);
-        match successors.len() {
-            0 => node_basic_block,
+        if self.peta_header_loop.contains_key(&id_sekarang) {
+            return self.strukturkan_loop_kompleks(cfg, dom, id_sekarang, stop_at);
+        }
+        let node_basic = NodeAst::Block(data_block.instruksi_list.clone());
+        let list_suksesor = &data_block.successors;
+        let ipd = dom.peta_post_idom.get(&id_sekarang).cloned();
+        let titik_merge_region = self.kalkulasi_titik_merge(dom, ipd, stop_at);
+        match list_suksesor.len() {
+            0 => node_basic,
             1 => {
-                let next_node = successors[0];
-                let rest_ast = self.analisis_region_refined(cfg, dom, next_node, stop_at);
-                self.gabungkan_sequence_nodes(node_basic_block, rest_ast)
+                let next_node = list_suksesor[0];
+                let ast_sisa = self.analisis_region_canggih(cfg, dom, next_node, stop_at);
+                self.gabungkan_node_sequence(node_basic, ast_sisa)
             },
             2 => {
-                self.handle_two_way_branch(cfg, dom, block_data, region_merge_point, stop_at, node_basic_block)
+                self.tangani_percabangan_dua_arah(cfg, dom, data_block, titik_merge_region, stop_at, node_basic)
             },
             _ => {
-                self.strukturkan_switch_case(cfg, dom, block_data, successors, stop_at, node_basic_block)
+                self.strukturkan_switch_case(cfg, dom, data_block, list_suksesor, stop_at, node_basic)
             }
         }
     }
-    fn hitung_region_merge_point(
+    fn kalkulasi_titik_merge(
         &self, 
         dom: &DominatorTree, 
-        ipd: Option<u64>, 
-        parent_stop: Option<u64>
+        ipd_lokal: Option<u64>, 
+        stop_parent: Option<u64>
     ) -> Option<u64> {
-        match (ipd, parent_stop) {
-            (Some(local), Some(parent)) => {
-                if dom.cek_apakah_didominasi(parent, local) {
-                    Some(local)
+        match (ipd_lokal, stop_parent) {
+            (Some(lokal), Some(parent)) => {
+                if dom.cek_apakah_didominasi(parent, lokal) {
+                    Some(lokal)
                 } else {
                     Some(parent)
                 }
             },
-            (Some(local), None) => Some(local),
+            (Some(lokal), None) => Some(lokal),
             (None, Some(parent)) => Some(parent),
             (None, None) => None
         }
     }
-    fn handle_two_way_branch(
+    fn coba_strukturkan_try_catch(
+        &mut self,
+        cfg: &ControlFlowGraph,
+        dom: &DominatorTree,
+        id_sekarang: u64,
+        stop_at: Option<u64>
+    ) -> Option<NodeAst> {
+        let block = cfg.blocks.get(&id_sekarang)?;
+        let mut is_potential_throw = false;
+        for stmt in &block.instruksi_list {
+            if let OperasiIr::Call = stmt.operation_code {
+                if let TipeOperand::Register(nama) = &stmt.operand_satu {
+                    if nama.contains("throw") || nama.contains("raise") {
+                        is_potential_throw = true;
+                    }
+                }
+            }
+        }
+        if is_potential_throw && block.successors.len() > 1 {
+            let id_handler = block.successors[1]; 
+            let id_normal = block.successors[0];
+            let ast_try = self.analisis_region_canggih(cfg, dom, id_normal, Some(id_handler));
+            self.node_terkunjungi.remove(&id_handler);
+            let ast_catch = self.analisis_region_canggih(cfg, dom, id_handler, stop_at);
+            return Some(NodeAst::TryCatch {
+                block_try: Box::new(ast_try),
+                handler_catch: Box::new(ast_catch),
+                tipe_exception: "GenericException".to_string(),
+            });
+        }
+        None
+    }
+    fn tangani_percabangan_dua_arah(
         &mut self,
         cfg: &ControlFlowGraph,
         dom: &DominatorTree,
         block: &crate::analysis::graph::cfg::BasicBlock,
-        merge_point: Option<u64>,
-        global_stop: Option<u64>,
-        prefix_node: NodeAst
+        titik_merge: Option<u64>,
+        stop_global: Option<u64>,
+        node_prefix: NodeAst
     ) -> NodeAst {
         let s_true = block.successors[0];
         let s_false = block.successors[1];
-        if let Some(ternary) = self.deteksi_pola_ternary(cfg, block, s_true, s_false, merge_point) {
-            let next_ast = if let Some(mp) = merge_point {
-                self.visited_nodes.remove(&mp); 
-                self.analisis_region_refined(cfg, dom, mp, global_stop)
+        if let Some(ternary) = self.deteksi_pola_ternary(cfg, block, s_true, s_false, titik_merge) {
+            let next_ast = if let Some(mp) = titik_merge {
+                self.node_terkunjungi.remove(&mp); 
+                self.analisis_region_canggih(cfg, dom, mp, stop_global)
             } else {
                 NodeAst::Empty
             };
-            return self.gabungkan_sequence_nodes(ternary, next_ast);
+            return self.gabungkan_node_sequence(ternary, next_ast);
         }
-        if let Some((cond_complex, entry_true, entry_false)) = self.deteksi_short_circuit(cfg, block, s_true, s_false) {
-            let true_ast = self.analisis_region_refined(cfg, dom, entry_true, merge_point);
-            let false_ast = self.analisis_region_refined(cfg, dom, entry_false, merge_point);
-            let if_stmt = NodeAst::IfElse {
-                condition: cond_complex,
-                true_branch: Box::new(true_ast),
-                false_branch: if self.is_ast_kosong(&false_ast) { None } else { Some(Box::new(false_ast)) }
+        if let Some((kondisi_kompleks, entry_true, entry_false)) = self.deteksi_short_circuit(cfg, block, s_true, s_false) {
+            let ast_true = self.analisis_region_canggih(cfg, dom, entry_true, titik_merge);
+            let ast_false = self.analisis_region_canggih(cfg, dom, entry_false, titik_merge);
+            let stmt_if = NodeAst::IfElse {
+                kondisi: kondisi_kompleks,
+                branch_true: Box::new(ast_true),
+                branch_false: if self.cek_apakah_ast_kosong(&ast_false) { None } else { Some(Box::new(ast_false)) }
             };
-            let next_ast = if let Some(mp) = merge_point {
-                self.visited_nodes.remove(&mp);
-                self.analisis_region_refined(cfg, dom, mp, global_stop)
+            let next_ast = if let Some(mp) = titik_merge {
+                self.node_terkunjungi.remove(&mp);
+                self.analisis_region_canggih(cfg, dom, mp, stop_global)
             } else {
                 NodeAst::Empty
             };
-            return self.gabungkan_sequence_nodes(self.gabungkan_sequence_nodes(prefix_node, if_stmt), next_ast);
+            return self.gabungkan_node_sequence(self.gabungkan_node_sequence(node_prefix, stmt_if), next_ast);
         }
-        let cond_str = self.rekonstruksi_kondisi_branch(&block.instruksi_list);
-        let true_ast = self.analisis_region_refined(cfg, dom, s_true, merge_point);
-        let false_ast = self.analisis_region_refined(cfg, dom, s_false, merge_point);
-        let if_stmt = NodeAst::IfElse {
-            condition: cond_str,
-            true_branch: Box::new(true_ast),
-            false_branch: if self.is_ast_kosong(&false_ast) { None } else { Some(Box::new(false_ast)) }
+        let str_kondisi = self.rekonstruksi_kondisi_branch(&block.instruksi_list);
+        let ast_true = self.analisis_region_canggih(cfg, dom, s_true, titik_merge);
+        let ast_false = self.analisis_region_canggih(cfg, dom, s_false, titik_merge);
+        let stmt_if = NodeAst::IfElse {
+            kondisi: str_kondisi,
+            branch_true: Box::new(ast_true),
+            branch_false: if self.cek_apakah_ast_kosong(&ast_false) { None } else { Some(Box::new(ast_false)) }
         };
-        let next_ast = if let Some(mp) = merge_point {
-            self.visited_nodes.remove(&mp);
-            self.analisis_region_refined(cfg, dom, mp, global_stop)
+        let next_ast = if let Some(mp) = titik_merge {
+            self.node_terkunjungi.remove(&mp);
+            self.analisis_region_canggih(cfg, dom, mp, stop_global)
         } else {
             NodeAst::Empty
         };
-        self.gabungkan_sequence_nodes(self.gabungkan_sequence_nodes(prefix_node, if_stmt), next_ast)
+        self.gabungkan_node_sequence(self.gabungkan_node_sequence(node_prefix, stmt_if), next_ast)
     }
-    fn strukturkan_loop_complex(
+
+    fn strukturkan_loop_kompleks(
         &mut self, 
         cfg: &ControlFlowGraph, 
         dom: &DominatorTree, 
-        header_id: u64, 
+        id_header: u64, 
         stop_at: Option<u64>
     ) -> NodeAst {
-        let block = cfg.blocks.get(&header_id).unwrap();
-        let prefix_node = NodeAst::Block(block.instruksi_list.clone());
-        let loop_exit_node = self.cari_loop_exit_node(cfg, dom, header_id);
-        let is_do_while = self.analisa_tipe_do_while(cfg, header_id);
-        let latch_opt = self.ambil_latch_utama(header_id);
-        self.loop_stack_context.push(LoopContext { 
-            header_id, 
-            latch_id: latch_opt,
-            merge_point: loop_exit_node,
+        let block = cfg.blocks.get(&id_header).unwrap();
+        let node_prefix = NodeAst::Block(block.instruksi_list.clone());
+        let node_exit_loop = self.cari_node_exit_loop(cfg, dom, id_header);
+        let is_do_while = self.analisa_tipe_do_while(cfg, id_header);
+        let latch_opt = self.ambil_latch_utama(id_header);
+        self.stack_konteks_loop.push(ContextLoop { 
+            id_header, 
+            id_latch: latch_opt,
+            titik_merge: node_exit_loop,
             is_do_while 
         });
-        let mut body_nodes = Vec::new();
+        let mut nodes_body = Vec::new();
         let mut loop_entries = Vec::new();
         for &succ in &block.successors {
-            if Some(succ) != loop_exit_node {
+            if Some(succ) != node_exit_loop {
                  loop_entries.push(succ);
             }
         }
         if !loop_entries.is_empty() {
-            let body_ast = self.analisis_region_refined(cfg, dom, loop_entries[0], Some(header_id));
-            body_nodes.push(body_ast);
+            let body_ast = self.analisis_region_canggih(cfg, dom, loop_entries[0], Some(id_header));
+            nodes_body.push(body_ast);
         }
-        self.loop_stack_context.pop();
-        let cond_str = if is_do_while {
+        self.stack_konteks_loop.pop();
+        let str_kondisi = if is_do_while {
             if let Some(latch_id) = latch_opt {
-                 if let Some(latch_block) = cfg.blocks.get(&latch_id) {
-                     self.rekonstruksi_kondisi_branch(&latch_block.instruksi_list)
+                 if let Some(block_latch) = cfg.blocks.get(&latch_id) {
+                     self.rekonstruksi_kondisi_branch(&block_latch.instruksi_list)
                  } else {
                      "true".to_string()
                  }
@@ -222,27 +263,27 @@ impl ControlFlowStructurer {
         } else {
             self.rekonstruksi_kondisi_branch(&block.instruksi_list)
         };
-        let combined_body = if body_nodes.is_empty() { NodeAst::Empty } else { NodeAst::Sequence(body_nodes) };
-        let loop_ast = NodeAst::WhileLoop {
-            condition: cond_str, 
+        let combined_body = if nodes_body.is_empty() { NodeAst::Empty } else { NodeAst::Sequence(nodes_body) };
+        let ast_loop = NodeAst::WhileLoop {
+            kondisi: str_kondisi, 
             body: Box::new(combined_body),
             is_do_while, 
         };
-        if let Some(exit_node) = loop_exit_node {
+        if let Some(exit_node) = node_exit_loop {
             if Some(exit_node) != stop_at {
-                self.visited_nodes.remove(&exit_node); 
-                let next_ast = self.analisis_region_refined(cfg, dom, exit_node, stop_at);
-                return self.gabungkan_sequence_nodes(self.gabungkan_sequence_nodes(prefix_node, loop_ast), next_ast);
+                self.node_terkunjungi.remove(&exit_node); 
+                let next_ast = self.analisis_region_canggih(cfg, dom, exit_node, stop_at);
+                return self.gabungkan_node_sequence(self.gabungkan_node_sequence(node_prefix, ast_loop), next_ast);
             }
         }
-        self.gabungkan_sequence_nodes(prefix_node, loop_ast)
+        self.gabungkan_node_sequence(node_prefix, ast_loop)
     }
-    fn analisa_tipe_do_while(&self, cfg: &ControlFlowGraph, header_id: u64) -> bool {
-        if let Some(latches) = self.loop_headers.get(&header_id) {
+    fn analisa_tipe_do_while(&self, cfg: &ControlFlowGraph, id_header: u64) -> bool {
+        if let Some(latches) = self.peta_header_loop.get(&id_header) {
             for &latch in latches {
-                if let Some(latch_block) = cfg.blocks.get(&latch) {
-                    if latch_block.successors.len() == 2 {
-                        if latch_block.successors.contains(&header_id) {
+                if let Some(block_latch) = cfg.blocks.get(&latch) {
+                    if block_latch.successors.len() == 2 {
+                        if block_latch.successors.contains(&id_header) {
                             return true;
                         }
                     }
@@ -251,58 +292,58 @@ impl ControlFlowStructurer {
         }
         false
     }
-    fn ambil_latch_utama(&self, header_id: u64) -> Option<u64> {
-        self.loop_headers.get(&header_id).and_then(|v| v.first()).cloned()
+    fn ambil_latch_utama(&self, id_header: u64) -> Option<u64> {
+        self.peta_header_loop.get(&id_header).and_then(|v| v.first()).cloned()
     }
     fn strukturkan_switch_case(
         &mut self,
         cfg: &ControlFlowGraph,
         dom: &DominatorTree,
         block: &crate::analysis::graph::cfg::BasicBlock,
-        successors: &[u64],
+        suksesor: &[u64],
         stop_at: Option<u64>,
-        prefix_node: NodeAst
+        node_prefix: NodeAst
     ) -> NodeAst {
-        let switch_var = self.analisa_variabel_switch(&block.instruksi_list);
-        let mut target_map: HashMap<u64, Vec<u64>> = HashMap::new();
-        for (idx, &succ) in successors.iter().enumerate() {
-            target_map.entry(succ).or_default().push(idx as u64);
+        let var_switch = self.analisa_variabel_switch(&block.instruksi_list);
+        let mut peta_target: HashMap<u64, Vec<u64>> = HashMap::new();
+        for (idx, &succ) in suksesor.iter().enumerate() {
+            peta_target.entry(succ).or_default().push(idx as u64);
         }
-        let mut cases_ast = Vec::new();
-        let merge_point = dom.peta_post_idom.get(&block.id_block).cloned().or(stop_at);
-        for (target, case_indices) in target_map {
-            let case_body = self.analisis_region_refined(cfg, dom, target, merge_point);
-            cases_ast.push((case_indices, case_body));
+        let mut list_kasus_ast = Vec::new();
+        let titik_merge = dom.peta_post_idom.get(&block.id_block).cloned().or(stop_at);
+        for (target, index_kasus) in peta_target {
+            let body_kasus = self.analisis_region_canggih(cfg, dom, target, titik_merge);
+            list_kasus_ast.push((index_kasus, body_kasus));
         }
-        cases_ast.sort_by(|a, b| a.0.first().unwrap_or(&0).cmp(b.0.first().unwrap_or(&0)));
-        let switch_ast = NodeAst::Switch {
-            variable: switch_var,
-            cases: cases_ast,
+        list_kasus_ast.sort_by(|a, b| a.0.first().unwrap_or(&0).cmp(b.0.first().unwrap_or(&0)));
+        let ast_switch = NodeAst::Switch {
+            variabel: var_switch,
+            kasus: list_kasus_ast,
             default: None, 
         };
-        if let Some(mp) = merge_point {
-            self.visited_nodes.remove(&mp);
-            let next_ast = self.analisis_region_refined(cfg, dom, mp, stop_at);
-            self.gabungkan_sequence_nodes(self.gabungkan_sequence_nodes(prefix_node, switch_ast), next_ast)
+        if let Some(mp) = titik_merge {
+            self.node_terkunjungi.remove(&mp);
+            let next_ast = self.analisis_region_canggih(cfg, dom, mp, stop_at);
+            self.gabungkan_node_sequence(self.gabungkan_node_sequence(node_prefix, ast_switch), next_ast)
         } else {
-            self.gabungkan_sequence_nodes(prefix_node, switch_ast)
+            self.gabungkan_node_sequence(node_prefix, ast_switch)
         }
     }
-    fn cek_jump_target_loop(&self, target_id: u64) -> Option<NodeAst> {
-        for ctx in self.loop_stack_context.iter().rev() {
-            if target_id == ctx.header_id {
+    fn cek_target_jump_loop(&self, target_id: u64) -> Option<NodeAst> {
+        for ctx in self.stack_konteks_loop.iter().rev() {
+            if target_id == ctx.id_header {
                 if !ctx.is_do_while {
                     return Some(NodeAst::Continue);
                 }
             }
-            if let Some(latch) = ctx.latch_id {
+            if let Some(latch) = ctx.id_latch {
                 if target_id == latch {
                     if ctx.is_do_while {
                         return Some(NodeAst::Continue);
                     }
                 }
             }
-            if let Some(exit) = ctx.merge_point {
+            if let Some(exit) = ctx.titik_merge {
                 if target_id == exit {
                     return Some(NodeAst::Break);
                 }
@@ -313,34 +354,34 @@ impl ControlFlowStructurer {
     fn deteksi_pola_ternary(
         &self, 
         cfg: &ControlFlowGraph,
-        header_block: &crate::analysis::graph::cfg::BasicBlock, 
-        true_node: u64, 
-        false_node: u64,
-        merge_point: Option<u64>
+        block_header: &crate::analysis::graph::cfg::BasicBlock, 
+        node_true: u64, 
+        node_false: u64,
+        titik_merge: Option<u64>
     ) -> Option<NodeAst> {
-        let mp = merge_point?;
-        let block_true = cfg.blocks.get(&true_node)?;
-        let block_false = cfg.blocks.get(&false_node)?;
+        let mp = titik_merge?;
+        let block_true = cfg.blocks.get(&node_true)?;
+        let block_false = cfg.blocks.get(&node_false)?;
         if block_true.successors.len() != 1 || block_true.successors[0] != mp { return None; }
         if block_false.successors.len() != 1 || block_false.successors[0] != mp { return None; }
         let (var_true, val_true) = self.ambil_assignment_terakhir(&block_true.instruksi_list)?;
         let (var_false, val_false) = self.ambil_assignment_terakhir(&block_false.instruksi_list)?;
         if var_true != var_false { return None; }
-        let cond_str = self.rekonstruksi_kondisi_branch(&header_block.instruksi_list);
-        let mut header_stmts = header_block.instruksi_list.clone();
-        if !header_stmts.is_empty() { header_stmts.pop(); }
+        let str_kondisi = self.rekonstruksi_kondisi_branch(&block_header.instruksi_list);
+        let mut stmts_header = block_header.instruksi_list.clone();
+        if !stmts_header.is_empty() { stmts_header.pop(); }
         let ternary = NodeAst::TernaryOp {
             target_var: var_true,
-            condition: cond_str,
-            true_val: val_true,
-            false_val: val_false
+            kondisi: str_kondisi,
+            nilai_true: val_true,
+            nilai_false: val_false
         };
-        Some(self.gabungkan_sequence_nodes(NodeAst::Block(header_stmts), ternary))
+        Some(self.gabungkan_node_sequence(NodeAst::Block(stmts_header), ternary))
     }
     fn deteksi_short_circuit(
         &self,
         cfg: &ControlFlowGraph,
-        header_block: &crate::analysis::graph::cfg::BasicBlock,
+        block_header: &crate::analysis::graph::cfg::BasicBlock,
         s_true: u64,
         s_false: u64
     ) -> Option<(String, u64, u64)> {
@@ -349,7 +390,7 @@ impl ControlFlowStructurer {
                 let b_true = block_b.successors[0];
                 let b_false = block_b.successors[1];
                 if b_false == s_false {
-                    let cond_a = self.rekonstruksi_kondisi_branch(&header_block.instruksi_list);
+                    let cond_a = self.rekonstruksi_kondisi_branch(&block_header.instruksi_list);
                     let cond_b = self.rekonstruksi_kondisi_branch(&block_b.instruksi_list);
                     return Some((format!("({}) && ({})", cond_a, cond_b), b_true, s_false));
                 }
@@ -360,7 +401,7 @@ impl ControlFlowStructurer {
                 let b_true = block_b.successors[0];
                 let b_false = block_b.successors[1];
                 if b_true == s_true {
-                    let cond_a = self.rekonstruksi_kondisi_branch(&header_block.instruksi_list);
+                    let cond_a = self.rekonstruksi_kondisi_branch(&block_header.instruksi_list);
                     let cond_b = self.rekonstruksi_kondisi_branch(&block_b.instruksi_list);
                     return Some((format!("({}) || ({})", cond_a, cond_b), s_true, b_false));
                 }
@@ -368,21 +409,21 @@ impl ControlFlowStructurer {
         }
         None
     }
-    fn normalisasi_irreducible_loops(&mut self, cfg: &mut ControlFlowGraph) {
-        let max_splits = 100; 
-        let mut changed = true;
-        while changed && self.split_counter < max_splits {
-            changed = false;
-            let mut dom_temp = DominatorTree::new();
-            dom_temp.hitung_dominators(cfg);
-            if let Some((source, target)) = self.cari_kandidat_irreducible(cfg, &dom_temp) {
-                self.lakukan_node_splitting(cfg, source, target);
-                self.split_counter += 1;
-                changed = true;
+    fn normalisasi_flow_irreducible(&mut self, cfg: &mut ControlFlowGraph) {
+        let batas_maksimal_split = 100; 
+        let mut ada_perubahan = true;
+        while ada_perubahan && self.counter_splitting < batas_maksimal_split {
+            ada_perubahan = false;
+            let mut dom_sementara = DominatorTree::new();
+            dom_sementara.hitung_dominators(cfg);
+            if let Some((sumber, target)) = self.temukan_kandidat_irreducible(cfg, &dom_sementara) {
+                self.lakukan_splitting_node(cfg, sumber, target);
+                self.counter_splitting += 1;
+                ada_perubahan = true;
             }
         }
     }
-    fn cari_kandidat_irreducible(&self, cfg: &ControlFlowGraph, dom: &DominatorTree) -> Option<(u64, u64)> {
+    fn temukan_kandidat_irreducible(&self, cfg: &ControlFlowGraph, dom: &DominatorTree) -> Option<(u64, u64)> {
         let mut visited = HashSet::new();
         let mut stack = Vec::new();
         stack.push(cfg.entry_point);
@@ -392,8 +433,8 @@ impl ControlFlowStructurer {
                 for &succ in &block.successors {
                     if visited.contains(&succ) {
                         if !dom.cek_apakah_didominasi(node, succ) {
-                            if let Some(succ_block) = cfg.blocks.get(&succ) {
-                                if succ_block.predecessors.len() > 1 {
+                            if let Some(block_succ) = cfg.blocks.get(&succ) {
+                                if block_succ.predecessors.len() > 1 {
                                     return Some((node, succ));
                                 }
                             }
@@ -406,18 +447,18 @@ impl ControlFlowStructurer {
         }
         None
     }
-    fn lakukan_node_splitting(&self, cfg: &mut ControlFlowGraph, source: u64, target: u64) {
-        let new_id = cfg.generate_id_baru();
-        cfg.buat_block_baru_dari_copy(target, new_id);
-        cfg.redirect_edge(source, target, new_id);
+    fn lakukan_splitting_node(&self, cfg: &mut ControlFlowGraph, sumber: u64, target: u64) {
+        let id_baru = cfg.generate_id_baru();
+        cfg.buat_block_baru_dari_copy(target, id_baru);
+        cfg.redirect_edge(sumber, target, id_baru);
     }
-    fn identifikasi_natural_loops(&mut self, dom_tree: &DominatorTree) {
-        self.loop_headers.clear();
+    fn identifikasi_loop_alami(&mut self, dom_tree: &DominatorTree) {
+        self.peta_header_loop.clear();
         for &(latch, header) in &dom_tree.list_back_edges {
-            self.loop_headers.entry(header).or_default().push(latch);
+            self.peta_header_loop.entry(header).or_default().push(latch);
         }
     }
-    fn cari_loop_exit_node(&self, cfg: &ControlFlowGraph, dom: &DominatorTree, header: u64) -> Option<u64> {
+    fn cari_node_exit_loop(&self, cfg: &ControlFlowGraph, dom: &DominatorTree, header: u64) -> Option<u64> {
         if let Some(block) = cfg.blocks.get(&header) {
             for &succ in &block.successors {
                 if !dom.cek_apakah_didominasi(succ, header) {
@@ -427,44 +468,44 @@ impl ControlFlowStructurer {
         }
         dom.peta_post_idom.get(&header).cloned()
     }
-    fn gabungkan_sequence_nodes(&self, first: NodeAst, second: NodeAst) -> NodeAst {
+    fn gabungkan_node_sequence(&self, first: NodeAst, second: NodeAst) -> NodeAst {
         match (first, second) {
             (NodeAst::Empty, b) => b,
             (a, NodeAst::Empty) => a,
-            (NodeAst::Sequence(mut a_vec), NodeAst::Sequence(b_vec)) => {
-                a_vec.extend(b_vec);
-                NodeAst::Sequence(a_vec)
+            (NodeAst::Sequence(mut vec_a), NodeAst::Sequence(vec_b)) => {
+                vec_a.extend(vec_b);
+                NodeAst::Sequence(vec_a)
             },
-            (NodeAst::Sequence(mut a_vec), b) => {
-                a_vec.push(b);
-                NodeAst::Sequence(a_vec)
+            (NodeAst::Sequence(mut vec_a), b) => {
+                vec_a.push(b);
+                NodeAst::Sequence(vec_a)
             },
-            (a, NodeAst::Sequence(mut b_vec)) => {
-                b_vec.insert(0, a);
-                NodeAst::Sequence(b_vec)
+            (a, NodeAst::Sequence(mut vec_b)) => {
+                vec_b.insert(0, a);
+                NodeAst::Sequence(vec_b)
             },
             (a, b) => NodeAst::Sequence(vec![a, b]),
         }
     }
-    fn is_ast_kosong(&self, ast: &NodeAst) -> bool {
+    fn cek_apakah_ast_kosong(&self, ast: &NodeAst) -> bool {
         matches!(ast, NodeAst::Empty)
     }
     fn rekonstruksi_kondisi_branch(&self, stmts: &[StatementIr]) -> String {
         if stmts.is_empty() { return "true".to_string(); }
         let last_stmt = stmts.last().unwrap();
-        let mut cmp_stmt_opt = None;
+        let mut stmt_cmp_opt = None;
         for i in (0..stmts.len()-1).rev() {
             match stmts[i].operation_code {
                 OperasiIr::Cmp | OperasiIr::Test | OperasiIr::FCmp => {
-                    cmp_stmt_opt = Some(&stmts[i]);
+                    stmt_cmp_opt = Some(&stmts[i]);
                     break;
                 },
                 _ => {}
             }
         }
-        if let Some(cmp_stmt) = cmp_stmt_opt {
-            let op1 = self.format_operand_readable(&cmp_stmt.operand_satu);
-            let op2 = self.format_operand_readable(&cmp_stmt.operand_dua);
+        if let Some(stmt_cmp) = stmt_cmp_opt {
+            let op1 = self.format_operand_readable(&stmt_cmp.operand_satu);
+            let op2 = self.format_operand_readable(&stmt_cmp.operand_dua);
             match last_stmt.operation_code {
                 OperasiIr::Je => format!("{} == {}", op1, op2),
                 OperasiIr::Jne => format!("{} != {}", op1, op2),

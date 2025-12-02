@@ -11,10 +11,12 @@ use std::collections::HashMap;
 use log::{info, error};
 use crate::arch::Architecture;
 use crate::loader::LoaderError;
+use crate::loader::vmem::VirtualMemory;
 
 pub struct ContextDecompiler {
     pub is_initialized: bool,
     pub last_error: String,
+    pub vmem: Option<VirtualMemory>,
 }
 
 #[unsafe(no_mangle)]
@@ -22,6 +24,7 @@ pub extern "C" fn buat_konteks_decompiler() -> *mut ContextDecompiler {
     let context = ContextDecompiler {
         is_initialized: true,
         last_error: String::new(),
+        vmem: None,
     };
     Box::into_raw(Box::new(context))
 }
@@ -50,7 +53,7 @@ pub extern "C" fn muat_file_biner(
             match loader::proses_muat_file(path_str) {
                 Ok(vmem) => {
                     info!("Berhasil muat: {}", path_str);
-                    info!("Arsitektur: {}", vmem.arsitektur);
+                    info!("Arsitektur: {} | Format: {}", vmem.arsitektur, vmem.format_biner);
                     let arsitektur: Box<dyn Architecture> = if vmem.arsitektur == "x86_64" {
                         Box::new(arch::x86::X86Arsitektur64)
                     } else if vmem.arsitektur.contains("arm") {
@@ -72,6 +75,10 @@ pub extern "C" fn muat_file_biner(
                     for (addr, ctx) in hasil_fungsi {
                         map_ir_global.insert(*addr, ctx.ir_code.clone());
                     }
+                    let ptr_size = if vmem.arsitektur.contains("64") { 8 } else { 4 };
+                    let mut vtable_analyzer = analysis::recovery::vtable::VtableAnalyzer::new(ptr_size);
+                    vtable_analyzer.jalankan_scan_heuristik(&vmem);
+                    vtable_analyzer.analisis_dan_rekonstruksi_kelas(&map_ir_global, &mut type_sys);
                     type_sys.analisis_interprosedural(&map_ir_global);
                     all_source_code.push_str(&emitter.generate_struct_defs(&type_sys));
                     let mut fungsi_sorted: Vec<_> = hasil_fungsi.keys().collect();
@@ -87,9 +94,12 @@ pub extern "C" fn muat_file_biner(
                         ssa_trans.lakukan_transformasi_ssa(&mut cfg, &dom_tree);
                         ssa_trans.optimasi_propagasi_konstanta(&mut cfg);
                         let mut expr_opt = analysis::passes::opt_expr::ExpressionOptimizer::new();
-                        expr_opt.jalankan_optimasi(&mut cfg);  
-                        ssa_trans.optimasi_dead_code(&mut cfg); 
-                        let calling_conv = analysis::recovery::abi::CallingConventionAnalyzer::new(arsitektur.as_ref());
+                        expr_opt.jalankan_optimasi(&mut cfg);
+                        ssa_trans.optimasi_dead_code(&mut cfg);
+                        let calling_conv = analysis::recovery::abi::CallingConventionAnalyzer::new(
+                            arsitektur.as_ref(), 
+                            &vmem.format_biner
+                        );
                         let params = calling_conv.deteksi_entry_params(&cfg);
                         let mut structurer = analysis::recovery::ast::ControlFlowStructurer::new();
                         let ast = structurer.bangun_tree_struktur(&mut cfg);
@@ -104,6 +114,7 @@ pub extern "C" fn muat_file_biner(
                         all_source_code.push_str(&func_code);
                     }
                     info!("{}", all_source_code);
+                    context.vmem = Some(vmem);
                     0
                 },
                 Err(e) => {
@@ -121,6 +132,9 @@ pub extern "C" fn muat_file_biner(
                 }
             }
         },
-        Err(_) => -1 
+        Err(_) => {
+            context.last_error = "Invalid UTF-8 path".to_string();
+            -1
+        }
     }
 }

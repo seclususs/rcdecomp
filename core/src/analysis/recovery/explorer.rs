@@ -34,7 +34,7 @@ impl RecursiveDescent {
         }
     }
     pub fn lakukan_analisis_full(&mut self, vmem: &VirtualMemory) {
-        info!("Memulai Analisis Recursive Descent Fase 1...");
+        info!("Memulai Analisis Recursive Descent Fase 1 (Enhanced Slicing)...");
         let mut frontier_functions: Vec<u64> = self.inisialisasi_queue_dari_simbol(vmem);
         if frontier_functions.is_empty() {
             frontier_functions.push(vmem.entry_point);
@@ -46,7 +46,7 @@ impl RecursiveDescent {
     }
     fn jalankan_fase_recursive(&mut self, vmem: &VirtualMemory, mut frontier: Vec<u64>, visited_addresses: &mut HashSet<u64>) {
         let arch_clone = self.arch_target.clone();
-        let lifter_clone = self.lifter;
+        let lifter_template = self.lifter.clone();
         for &addr in &frontier {
             self.visited_global.insert(addr);
         }
@@ -60,7 +60,7 @@ impl RecursiveDescent {
                         func_addr, 
                         vmem, 
                         &engine_local, 
-                        lifter_clone
+                        lifter_template.clone()
                     )
                 })
                 .collect();
@@ -103,7 +103,7 @@ impl RecursiveDescent {
                     if Self::cek_heuristic_gap_entry(vmem, curr, &engine) {
                         info!("Fungsi ditemukan via Gap Analysis di 0x{:x}", curr);
                         detected_gap_funcs.push(curr);
-                        let (_, _, _, _, covered) = Self::analisa_fungsi_worker(curr, vmem, &engine, self.lifter);
+                        let (_, _, _, _, covered) = Self::analisa_fungsi_worker(curr, vmem, &engine, self.lifter.clone());
                         visited_addresses.extend(covered);
                         curr += 16; 
                     } else {
@@ -162,6 +162,7 @@ impl RecursiveDescent {
         let mut visited_local = HashSet::new();
         let mut found_call_targets = Vec::new();
         let mut local_jump_targets = HashMap::new();
+        let mut instruction_history: Vec<InstructionNormalized> = Vec::new(); 
         let mut max_addr = start_addr;
         worklist_block.push_back(start_addr);
         while let Some(curr_addr) = worklist_block.pop_front() {
@@ -178,6 +179,7 @@ impl RecursiveDescent {
                 let (is_terminator, new_targets, jump_table_res) = Self::analisa_control_flow_lokal(
                     &instr, 
                     vmem,
+                    &instruction_history, // Pass history
                     &mut found_call_targets
                 );
                 if let Some(targets) = jump_table_res {
@@ -191,12 +193,18 @@ impl RecursiveDescent {
                 }
                 let micro_ops = lifter.konversi_instruksi_ke_microcode(&instr);
                 instructions_ir.extend(micro_ops);
+                instruction_history.push(instr);
+                if instruction_history.len() > 50 {
+                    instruction_history.remove(0);
+                }
                 if !is_terminator {
                     if vmem.simbol_global.contains_key(&next_addr) {
                          debug!("Control flow stop: fallthrough ke simbol global di 0x{:x}", next_addr);
                     } else {
                         worklist_block.push_back(next_addr);
                     }
+                } else {
+                    instruction_history.clear();
                 }
             }
         }
@@ -212,6 +220,7 @@ impl RecursiveDescent {
     fn analisa_control_flow_lokal(
         instr: &InstructionNormalized, 
         vmem: &VirtualMemory,
+        history: &[InstructionNormalized],
         global_targets_collector: &mut Vec<u64>
     ) -> (bool, Vec<u64>, Option<Vec<u64>>) {
         let mnemonic = instr.mnemonic.as_str();
@@ -224,11 +233,11 @@ impl RecursiveDescent {
                     global_targets_collector.push(target);
                 }
             },
-            "jmp" | "b" => {
+            "jmp" | "b" | "br" => {
                 if let Some(target) = Self::ekstrak_target_address(instr) {
                     local_targets.push(target);
                 } else {
-                    if let Some(targets) = JumpTableAnalyzer::analisis_jump_table(instr, vmem) {
+                    if let Some(targets) = JumpTableAnalyzer::analisa_jump_table_slicing(instr, history, vmem) {
                         jump_table_targets = Some(targets);
                     }
                 }
