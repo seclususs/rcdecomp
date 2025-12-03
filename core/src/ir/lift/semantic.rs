@@ -61,11 +61,11 @@ impl SemanticEngine {
         
         self.registrasi_instruksi("imul", vec![
             TemplateMicroOp { operasi: OperasiIr::Imul, tipe_hasil: TipeDataIr::Unknown, pakai_dest_sebagai_src1: true, is_vector_op: false }
-        ], vec![EfekFlag::SetOverflow, EfekFlag::SetCarry]); // imul x86: OF=CF, sisanya undefined
+        ], vec![EfekFlag::SetOverflow, EfekFlag::SetCarry]); 
 
         self.registrasi_instruksi("xor", vec![
             TemplateMicroOp { operasi: OperasiIr::Xor, tipe_hasil: TipeDataIr::Unknown, pakai_dest_sebagai_src1: true, is_vector_op: false }
-        ], vec![EfekFlag::SetZero, EfekFlag::SetSign, EfekFlag::SetParity, EfekFlag::Undefined]); // CF/OF cleared (0), SF/ZF/PF set
+        ], vec![EfekFlag::SetZero, EfekFlag::SetSign, EfekFlag::SetParity, EfekFlag::Undefined]); 
     }
     fn inisialisasi_definisi_simd(&mut self) {
         self.registrasi_instruksi("addps", vec![
@@ -145,12 +145,20 @@ impl SemanticEngine {
                     ).with_type(TipeDataIr::I8));
                 },
                 EfekFlag::SetSign => {
-                     ops_output.push(StatementIr::new(addr, OperasiIr::Unknown, TipeOperand::Register("eflags_sf".to_string()), result.clone()));
+                     ops_output.push(StatementIr::new(addr, OperasiIr::Mov, TipeOperand::Register("eflags_sf".to_string()), result.clone()));
+                },
+                EfekFlag::SetCarry => {
+                    ops_output.push(StatementIr::new(addr, OperasiIr::Mov, TipeOperand::Register("eflags_cf".to_string()), result.clone()));
+                },
+                EfekFlag::SetOverflow => {
+                    ops_output.push(StatementIr::new(addr, OperasiIr::Mov, TipeOperand::Register("eflags_of".to_string()), result.clone()));
+                },
+                EfekFlag::SetParity => {
+                    ops_output.push(StatementIr::new(addr, OperasiIr::Mov, TipeOperand::Register("eflags_pf".to_string()), result.clone()));
                 },
                 EfekFlag::Undefined => {
                      ops_output.push(StatementIr::new(addr, OperasiIr::Mov, TipeOperand::Register("eflags_undef".to_string()), TipeOperand::Immediate(1)));
                 },
-                _ => {} 
             }
         }
     }

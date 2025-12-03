@@ -198,69 +198,85 @@ impl<'a> TypeSolver<'a> {
         }
     }
     fn selesaikan_iterasi_constraints(&mut self) -> bool {
-        let mut changed = false;
+        let mut any_change = false;
         let active_constraints: Vec<ConstraintTipe> = self.sys.constraints.iter().cloned().collect();
-        for cons in active_constraints {
-            match cons {
-                ConstraintTipe::IsType(var, tipe) => {
-                    if self.unifikasi_variabel_dengan_tipe(&var, &tipe) { changed = true; }
-                },
-                ConstraintTipe::Equal(v1, v2) => {
-                    if self.unifikasi_dua_variabel(&v1, &v2) { changed = true; }
-                },
-                ConstraintTipe::HasField(base_var, offset, field_val_var) => {
-                    if self.proses_struct_field(&base_var, offset, &field_val_var) {
-                        changed = true;
-                    }
-                },
-                ConstraintTipe::ArgPass(var, func_addr, arg_idx) => {
-                    let var_type = self.sys.variable_types.get(&var).cloned().unwrap_or(TipePrimitif::Unknown);
-                    if var_type != TipePrimitif::Unknown {
-                        if let Some(mut sig) = self.sys.global_signatures.remove(&func_addr) {
-                            if arg_idx < sig.arg_types.len() {
-                                let unified = self.gabungkan_tipe_konflik(&sig.arg_types[arg_idx], &var_type);
-                                if sig.arg_types[arg_idx] != unified {
-                                    sig.arg_types[arg_idx] = unified;
+        for _ in 0..100 {
+            let mut changed = false;
+            for cons in &active_constraints {
+                match cons {
+                    ConstraintTipe::IsType(var, tipe) => {
+                        if self.unifikasi_variabel_dengan_tipe(var, tipe) { changed = true; }
+                    },
+                    ConstraintTipe::Equal(v1, v2) => {
+                        if self.unifikasi_dua_variabel(v1, v2) { changed = true; }
+                    },
+                    ConstraintTipe::HasField(base_var, offset, field_val_var) => {
+                        if self.proses_struct_field(base_var, *offset, field_val_var) {
+                            changed = true;
+                        }
+                    },
+                    ConstraintTipe::ArgPass(var, func_addr, arg_idx) => {
+                        if let Some(mut sig) = self.sys.global_signatures.remove(func_addr) {
+                            if *arg_idx < sig.arg_types.len() {
+                                let sig_type = sig.arg_types[*arg_idx].clone();
+                                if sig_type != TipePrimitif::Unknown {
+                                    if self.unifikasi_variabel_dengan_tipe(var, &sig_type) {
+                                        changed = true;
+                                    }
+                                }
+                                if sig_type == TipePrimitif::Unknown {
+                                    let var_type = self.sys.variable_types.get(var).cloned().unwrap_or(TipePrimitif::Unknown);
+                                    if var_type != TipePrimitif::Unknown {
+                                        let unified = self.gabungkan_tipe_konflik(&sig_type, &var_type);
+                                        if sig.arg_types[*arg_idx] != unified {
+                                            sig.arg_types[*arg_idx] = unified;
+                                            changed = true;
+                                        }
+                                    }
+                                }
+                            }
+                            self.sys.global_signatures.insert(*func_addr, sig);
+                        }
+                    },
+                    ConstraintTipe::CallResult(dest_var, func_addr) => {
+                        let ret_type_opt = self.sys.global_signatures.get(func_addr).map(|s| s.return_type.clone());
+                        if let Some(ret_type) = ret_type_opt {
+                            if ret_type != TipePrimitif::Unknown {
+                                if self.unifikasi_variabel_dengan_tipe(dest_var, &ret_type) {
                                     changed = true;
                                 }
                             }
-                            self.sys.global_signatures.insert(func_addr, sig);
                         }
-                    }
-                },
-                ConstraintTipe::CallResult(dest_var, func_addr) => {
-                    let ret_type_opt = self.sys.global_signatures.get(&func_addr).map(|s| s.return_type.clone());
-                    if let Some(ret_type) = ret_type_opt {
-                        if ret_type != TipePrimitif::Unknown {
-                            if self.unifikasi_variabel_dengan_tipe(&dest_var, &ret_type) {
-                                changed = true;
+                    },
+                    ConstraintTipe::ReturnResult(reg_name, func_addr) => {
+                        let reg_type = self.sys.variable_types.get(reg_name).cloned().unwrap_or(TipePrimitif::Unknown);
+                        if reg_type != TipePrimitif::Unknown {
+                            if let Some(mut sig) = self.sys.global_signatures.remove(func_addr) {
+                                let unified = self.gabungkan_tipe_konflik(&sig.return_type, &reg_type);
+                                if sig.return_type != unified {
+                                    sig.return_type = unified;
+                                    changed = true;
+                                }
+                                self.sys.global_signatures.insert(*func_addr, sig);
                             }
                         }
-                    }
-                },
-                ConstraintTipe::ReturnResult(reg_name, func_addr) => {
-                    let reg_type = self.sys.variable_types.get(&reg_name).cloned().unwrap_or(TipePrimitif::Unknown);
-                    if reg_type != TipePrimitif::Unknown {
-                        if let Some(mut sig) = self.sys.global_signatures.remove(&func_addr) {
-                            let unified = self.gabungkan_tipe_konflik(&sig.return_type, &reg_type);
-                            if sig.return_type != unified {
-                                sig.return_type = unified;
-                                changed = true;
-                            }
-                            self.sys.global_signatures.insert(func_addr, sig);
+                    },
+                    ConstraintTipe::IsArrayBase(var, elem_type) => {
+                        let ptr_type = TipePrimitif::Pointer(Box::new(elem_type.clone()));
+                        if self.unifikasi_variabel_dengan_tipe(var, &ptr_type) {
+                            changed = true;
                         }
-                    }
-                },
-                ConstraintTipe::IsArrayBase(var, elem_type) => {
-                    let ptr_type = TipePrimitif::Pointer(Box::new(elem_type));
-                    if self.unifikasi_variabel_dengan_tipe(&var, &ptr_type) {
-                        changed = true;
-                    }
-                },
-                ConstraintTipe::DerivedPointer(_, _, _) => { }
+                    },
+                    ConstraintTipe::DerivedPointer(_, _, _) => { }
+                }
+            }
+            if changed {
+                any_change = true;
+            } else {
+                break;
             }
         }
-        changed
+        any_change
     }
     fn proses_struct_field(&mut self, base_var: &str, offset: i64, field_val_var: &str) -> bool {
         let mut changed = false;
@@ -346,13 +362,13 @@ impl<'a> TypeSolver<'a> {
     }
     fn gabungkan_tipe_konflik(&mut self, t1: &TipePrimitif, t2: &TipePrimitif) -> TipePrimitif {
         if t1 == t2 { return t1.clone(); }
+        if let TipePrimitif::Unknown = t1 { return t2.clone(); }
+        if let TipePrimitif::Unknown = t2 { return t1.clone(); }
         if self.sys.unification_cache.contains(&(t1.clone(), t2.clone())) {
             return t1.clone(); 
         }
         self.sys.unification_cache.insert((t1.clone(), t2.clone()));
         match (t1, t2) {
-            (TipePrimitif::Unknown, t) => t.clone(),
-            (t, TipePrimitif::Unknown) => t.clone(),
             (TipePrimitif::Pointer(in1), TipePrimitif::Pointer(in2)) => {
                 let unified_inner = self.gabungkan_tipe_konflik(in1, in2);
                 TipePrimitif::Pointer(Box::new(unified_inner))

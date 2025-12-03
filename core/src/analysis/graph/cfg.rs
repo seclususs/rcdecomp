@@ -81,7 +81,7 @@ impl ControlFlowGraph {
                     }
                 },
                 OperasiIr::Je | OperasiIr::Jne | OperasiIr::Call | OperasiIr::Jg | 
-                OperasiIr::Jge | OperasiIr::Jl | OperasiIr::Jle | OperasiIr::Cmp | OperasiIr::Test | OperasiIr::FCmp => {
+                OperasiIr::Jge | OperasiIr::Jl | OperasiIr::Jle => {
                     if let crate::ir::types::TipeOperand::Immediate(target) = stmt.operand_satu {
                         leaders.insert(target as u64);
                     }

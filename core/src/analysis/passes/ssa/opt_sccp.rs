@@ -191,6 +191,12 @@ impl SccpSolver {
                             OperasiIr::Xor => StatusLattice::Constant(c1 ^ c2),
                             OperasiIr::Shl => StatusLattice::Constant(c1 << (c2 as u32)),
                             OperasiIr::Shr => StatusLattice::Constant(c1 >> (c2 as u32)),
+                            OperasiIr::Je => StatusLattice::Constant(if c1 == c2 { 1 } else { 0 }),
+                            OperasiIr::Jne => StatusLattice::Constant(if c1 != c2 { 1 } else { 0 }),
+                            OperasiIr::Jg => StatusLattice::Constant(if c1 > c2 { 1 } else { 0 }),
+                            OperasiIr::Jl => StatusLattice::Constant(if c1 < c2 { 1 } else { 0 }),
+                            OperasiIr::Jge => StatusLattice::Constant(if c1 >= c2 { 1 } else { 0 }),
+                            OperasiIr::Jle => StatusLattice::Constant(if c1 <= c2 { 1 } else { 0 }),
                             _ => StatusLattice::Bottom,
                         }
                     },
@@ -231,6 +237,9 @@ impl SccpSolver {
             TipeOperand::Expression { operand_kiri, operand_kanan, .. } => {
                 self.ganti_konstanta_di_operand(operand_kiri);
                 self.ganti_konstanta_di_operand(operand_kanan);
+                if let StatusLattice::Constant(c) = self.evaluasi_operand(op) {
+                    *op = TipeOperand::Immediate(c);
+                }
             },
             _ => {}
         }

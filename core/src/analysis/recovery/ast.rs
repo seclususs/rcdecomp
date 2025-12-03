@@ -425,24 +425,36 @@ impl ControlFlowStructurer {
     }
     fn temukan_kandidat_irreducible(&self, cfg: &ControlFlowGraph, dom: &DominatorTree) -> Option<(u64, u64)> {
         let mut visited = HashSet::new();
+        let mut on_stack = HashSet::new();
         let mut stack = Vec::new();
-        stack.push(cfg.entry_point);
-        while let Some(node) = stack.pop() {
-            if !visited.insert(node) { continue; }
-            if let Some(block) = cfg.blocks.get(&node) {
-                for &succ in &block.successors {
-                    if visited.contains(&succ) {
-                        if !dom.cek_apakah_didominasi(node, succ) {
+        stack.push((cfg.entry_point, 0));
+        on_stack.insert(cfg.entry_point);
+        visited.insert(cfg.entry_point);
+        while let Some((node, idx)) = stack.last_mut() {
+            let mut found_next = false;
+            if let Some(block) = cfg.blocks.get(node) {
+                if *idx < block.successors.len() {
+                    let succ = block.successors[*idx];
+                    *idx += 1;
+                    if on_stack.contains(&succ) {
+                        if !dom.cek_apakah_didominasi(*node, succ) {
                             if let Some(block_succ) = cfg.blocks.get(&succ) {
                                 if block_succ.predecessors.len() > 1 {
-                                    return Some((node, succ));
+                                    return Some((*node, succ));
                                 }
                             }
                         }
-                    } else {
-                        stack.push(succ);
+                    } else if !visited.contains(&succ) {
+                        visited.insert(succ);
+                        on_stack.insert(succ);
+                        stack.push((succ, 0));
+                        found_next = true;
                     }
                 }
+            }
+            if !found_next {
+                let (popped, _) = stack.pop().unwrap();
+                on_stack.remove(&popped);
             }
         }
         None
